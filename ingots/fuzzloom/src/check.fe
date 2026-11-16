@@ -200,3 +200,18 @@ fn range_campaign_shrinks_toward_its_floor() {
     )
     assert!(r.failed && r.shrunk.value == 700)
 }
+
+#[test]
+fn signed_counterexample_shrinks_to_smallest_magnitude() {
+    // Fails for every x <= -1000. The smallest failing magnitude is -1000.
+    let r = find_all(|x: i64| x > -1000, seed: 21, runs: 5000)
+    assert!(r.failed)
+    assert!(i64::from_word(r.shrunk.value) == -1000)
+}
+
+#[test]
+fn signed_overflow_edge_is_found() {
+    // abs-style bug: negating MIN overflows. Bias reaches MIN directly.
+    let r = find_all(|x: i32| x != i32::min(), seed: 3, runs: 2000)
+    assert!(r.failed && i32::from_word(r.shrunk.value) == i32::min())
+}

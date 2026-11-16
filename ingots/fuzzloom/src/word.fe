@@ -3,6 +3,12 @@
 //! Generation, shrinking and reporting all operate on `u256` words. A type
 //! takes part by mapping itself to and from a word, which lets one generic
 //! runner serve every integer width and keeps payloads uniform for tooling.
+//!
+//! Signed integers use zigzag encoding (0, -1, 1, -2, 2, ... map to words
+//! 0, 1, 2, 3, 4, ...). Word order then matches magnitude, so shrinking
+//! toward word 0 shrinks toward zero from both sides, and the generic range
+//! edges land on the signed edges: word 0 is 0, word 1 is -1, the top word is
+//! MIN and the one below it is MAX.
 
 pub trait Word {
     /// The largest word value this type can represent.
@@ -97,6 +103,114 @@ impl Word for bool {
     }
 }
 
+impl Word for i8 {
+    fn max_word() -> u256 {
+        0xFF
+    }
+    fn from_word(_ w: u256) -> i8 {
+        let z: u8 = w.downcast_truncate()
+        let mask: u8 = if z & 1 == 1 { u8::max() } else { 0 }
+        let bits: u8 = (z >> 1) ^ mask
+        bits.downcast_unchecked()
+    }
+    fn to_word(self) -> u256 {
+        let bits: u8 = self.downcast_unchecked()
+        let mask: u8 = if self < 0 { u8::max() } else { 0 }
+        let z: u8 = (bits << 1) ^ mask
+        z as u256
+    }
+}
+
+impl Word for i16 {
+    fn max_word() -> u256 {
+        0xFFFF
+    }
+    fn from_word(_ w: u256) -> i16 {
+        let z: u16 = w.downcast_truncate()
+        let mask: u16 = if z & 1 == 1 { u16::max() } else { 0 }
+        let bits: u16 = (z >> 1) ^ mask
+        bits.downcast_unchecked()
+    }
+    fn to_word(self) -> u256 {
+        let bits: u16 = self.downcast_unchecked()
+        let mask: u16 = if self < 0 { u16::max() } else { 0 }
+        let z: u16 = (bits << 1) ^ mask
+        z as u256
+    }
+}
+
+impl Word for i32 {
+    fn max_word() -> u256 {
+        0xFFFFFFFF
+    }
+    fn from_word(_ w: u256) -> i32 {
+        let z: u32 = w.downcast_truncate()
+        let mask: u32 = if z & 1 == 1 { u32::max() } else { 0 }
+        let bits: u32 = (z >> 1) ^ mask
+        bits.downcast_unchecked()
+    }
+    fn to_word(self) -> u256 {
+        let bits: u32 = self.downcast_unchecked()
+        let mask: u32 = if self < 0 { u32::max() } else { 0 }
+        let z: u32 = (bits << 1) ^ mask
+        z as u256
+    }
+}
+
+impl Word for i64 {
+    fn max_word() -> u256 {
+        0xFFFFFFFFFFFFFFFF
+    }
+    fn from_word(_ w: u256) -> i64 {
+        let z: u64 = w.downcast_truncate()
+        let mask: u64 = if z & 1 == 1 { u64::max() } else { 0 }
+        let bits: u64 = (z >> 1) ^ mask
+        bits.downcast_unchecked()
+    }
+    fn to_word(self) -> u256 {
+        let bits: u64 = self.downcast_unchecked()
+        let mask: u64 = if self < 0 { u64::max() } else { 0 }
+        let z: u64 = (bits << 1) ^ mask
+        z as u256
+    }
+}
+
+impl Word for i128 {
+    fn max_word() -> u256 {
+        0xFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFF
+    }
+    fn from_word(_ w: u256) -> i128 {
+        let z: u128 = w.downcast_truncate()
+        let mask: u128 = if z & 1 == 1 { u128::max() } else { 0 }
+        let bits: u128 = (z >> 1) ^ mask
+        bits.downcast_unchecked()
+    }
+    fn to_word(self) -> u256 {
+        let bits: u128 = self.downcast_unchecked()
+        let mask: u128 = if self < 0 { u128::max() } else { 0 }
+        let z: u128 = (bits << 1) ^ mask
+        z as u256
+    }
+}
+
+impl Word for i256 {
+    fn max_word() -> u256 {
+        u256::max()
+    }
+    fn from_word(_ w: u256) -> i256 {
+        let z: u256 = w
+        let mask: u256 = if z & 1 == 1 { u256::max() } else { 0 }
+        let bits: u256 = (z >> 1) ^ mask
+        bits.downcast_unchecked()
+    }
+    fn to_word(self) -> u256 {
+        let bits: u256 = self.downcast_unchecked()
+        let mask: u256 = if self < 0 { u256::max() } else { 0 }
+        let z: u256 = (bits << 1) ^ mask
+        z
+    }
+}
+
 #[test]
 fn round_trips_at_the_type_maximum() {
     assert!(u8::from_word(u8::max_word()) == 255)
@@ -111,4 +225,41 @@ fn bool_maps_to_zero_and_one() {
     assert!(bool::from_word(0) == false)
     assert!(bool::from_word(1) == true)
     assert!(true.to_word() == 1 && false.to_word() == 0)
+}
+
+#[test]
+fn zigzag_orders_by_magnitude() {
+    assert!((0 as i64).to_word() == 0)
+    assert!((-1 as i64).to_word() == 1)
+    assert!((1 as i64).to_word() == 2)
+    assert!((-2 as i64).to_word() == 3)
+    assert!((2 as i64).to_word() == 4)
+}
+
+#[test]
+fn zigzag_extremes_sit_at_the_top_words() {
+    assert!(i8::min().to_word() == i8::max_word())
+    assert!(i8::max().to_word() == i8::max_word() - 1)
+    assert!(i256::min().to_word() == u256::max())
+    assert!(i256::max().to_word() == u256::max() - 1)
+}
+
+#[test]
+fn signed_round_trip_every_i8() {
+    var w: u256 = 0
+    while w <= 255 {
+        assert!(i8::from_word(w).to_word() == w)
+        w += 1
+    }
+}
+
+#[test]
+fn signed_round_trip_wide_values() {
+    assert!(i64::from_word(i64::min().to_word()) == i64::min())
+    assert!(
+        i128::from_word((-123456789 as i128).to_word()) == -123456789,
+    )
+    assert!(i256::from_word(i256::min().to_word()) == i256::min())
+    assert!(i32::from_word((-7 as i32).to_word()) == -7)
+    assert!(i16::from_word(i16::max().to_word()) == i16::max())
 }
