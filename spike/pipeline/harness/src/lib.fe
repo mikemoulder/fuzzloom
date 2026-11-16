@@ -1,0 +1,10 @@
+use fuzzloom::{check_u64, U64Any}
+use demo::prop_sat_add_monotone
+
+const SEED: u64 = 7
+const RUNS: u64 = 10000
+
+#[test]
+fn fuzz_prop_sat_add_monotone() {
+    check_u64(U64Any {}, prop_sat_add_monotone, seed: SEED, runs: RUNS)
+}

@@ -1,0 +1,7 @@
+[ingot]
+name = "harness"
+version = "0.1.0"
+
+[dependencies]
+fuzzloom = { path = "../fuzzloom" }
+demo = { path = "../demo" }

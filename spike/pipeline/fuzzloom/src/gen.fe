@@ -1,0 +1,22 @@
+use ingot::rng::Rng
+
+pub trait Gen {
+    uses E
+    type Out
+    fn gen(self, _ rng: mut Rng) -> Self::Out uses E
+}
+
+pub struct U64Any {}
+
+impl Gen for U64Any {
+    uses E = ()
+    type Out = u64
+    fn gen(self, _ rng: mut Rng) -> u64 {
+        let r = rng.next_u64()
+        if r % 4 == 0 {
+            let edges: [u64; 6] = [0, 1, 2, 0x7FFFFFFFFFFFFFFF, 0xFFFFFFFFFFFFFFFE, 0xFFFFFFFFFFFFFFFF]
+            return edges[((r >> 8) % 6).downcast_truncate()]
+        }
+        rng.next_u64()
+    }
+}

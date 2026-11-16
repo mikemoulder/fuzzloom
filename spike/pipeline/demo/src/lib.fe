@@ -1,0 +1,9 @@
+pub fn sat_add(_ a: u64, _ b: u64) -> u64 {
+    if a > 0xFFFFFFFFFFFFFF00 { return 0 }
+    if b > 0xFFFFFFFFFFFFFFFF - a { return 0xFFFFFFFFFFFFFFFF }
+    a + b
+}
+
+pub fn prop_sat_add_monotone(_ x: u64) -> bool {
+    sat_add(x, 1) >= x
+}

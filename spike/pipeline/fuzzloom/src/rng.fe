@@ -1,0 +1,19 @@
+pub struct Rng {
+    pub state: u64,
+}
+
+impl Rng {
+    pub fn new(_ seed: u64) -> Self {
+        let s = if seed == 0 { 0x9E3779B97F4A7C15 } else { seed }
+        Rng { state: s }
+    }
+
+    pub fn next_u64(mut self) -> u64 {
+        var x = self.state
+        x = x ^ (x >> 12)
+        x = x ^ (x << 25)
+        x = x ^ (x >> 27)
+        self.state = x
+        x.wrapping_mul(0x2545F4914F6CDD1D)
+    }
+}

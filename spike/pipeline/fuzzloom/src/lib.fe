@@ -1,0 +1,36 @@
+pub use rng::Rng
+pub use gen::{Gen, U64Any}
+use std::evm::revert_error
+
+#[error]
+pub struct Counterexample {
+    pub seed: u64,
+    pub iteration: u64,
+    pub original: u64,
+    pub shrunk: u64,
+}
+
+#[error]
+pub struct Passed {
+    pub seed: u64,
+    pub runs: u64,
+}
+
+pub fn check_u64<G: Gen<Out = u64>, P: Fn(u64) -> bool>(_ g: G, _ prop: P, seed: u64, runs: u64) -> ! uses (G::E, P::E) {
+    var rng = Rng::new(seed)
+    var i: u64 = 0
+    while i < runs {
+        let x = g.gen(mut rng)
+        if !prop(x) {
+            var best = x
+            var lo: u64 = 0
+            while lo < best {
+                let mid = lo + (best - lo) / 2
+                if !prop(mid) { best = mid } else { lo = mid + 1 }
+            }
+            revert_error(Counterexample { seed, iteration: i, original: x, shrunk: best })
+        }
+        i += 1
+    }
+    revert_error(Passed { seed, runs })
+}
