@@ -1,0 +1,94 @@
+//! Campaign inputs: up to three `u256` words, one per property argument.
+//!
+//! Each argument's type maps to and from its word through `Word`, so the
+//! generator, shrinker and payloads stay type-agnostic. `Bounds` gives each
+//! argument an inclusive word range; its `lo` is also the shrink floor.
+
+use ingot::word::Word
+
+/// Largest supported property arity.
+pub const MAX_ARITY: u64 = 3
+
+/// One generated input. Words beyond the property's arity are zero.
+pub struct Input { pub w0: u256, pub w1: u256, pub w2: u256 }
+
+impl Copy for Input {}
+
+impl Input {
+    pub fn zero() -> Self {
+        Input { w0: 0, w1: 0, w2: 0 }
+    }
+
+    pub fn one(_ w0: u256) -> Self {
+        Input { w0, w1: 0, w2: 0 }
+    }
+
+    pub fn two(_ w0: u256, _ w1: u256) -> Self {
+        Input { w0, w1, w2: 0 }
+    }
+
+    pub fn three(_ w0: u256, _ w1: u256, _ w2: u256) -> Self {
+        Input { w0, w1, w2 }
+    }
+
+    /// Word of argument `i` (0-based).
+    pub fn get(self, _ i: u64) -> u256 {
+        if i == 0 {
+            self.w0
+        } else if i == 1 { self.w1 } else { self.w2 }
+    }
+
+    /// Copy with argument `i` replaced by `w`.
+    pub fn with(self, _ i: u64, _ w: u256) -> Self {
+        if i == 0 {
+            Input { w0: w, w1: self.w1, w2: self.w2 }
+        } else if i == 1 {
+            Input { w0: self.w0, w1: w, w2: self.w2 }
+        } else {
+            Input { w0: self.w0, w1: self.w1, w2: w }
+        }
+    }
+
+    pub fn same(self, _ other: Input) -> bool {
+        self.w0 == other.w0 && self.w1 == other.w1 && self.w2 == other.w2
+    }
+}
+
+/// Inclusive word range for each argument.
+pub struct Bounds { pub lo: Input, pub hi: Input }
+
+impl Copy for Bounds {}
+
+impl Bounds {
+    /// Every value of each argument type, given each type's top word.
+    pub fn full(_ m0: u256, _ m1: u256, _ m2: u256) -> Self {
+        Bounds { lo: Input::zero(), hi: Input::three(m0, m1, m2) }
+    }
+
+    /// Copy with argument `i` restricted to `lo..=hi` (swapped if reversed).
+    pub fn restrict(self, _ i: u64, lo: u256, hi: u256) -> Self {
+        let (a, b) = if lo <= hi { (lo, hi) } else { (hi, lo) }
+        Bounds { lo: self.lo.with(i, a), hi: self.hi.with(i, b) }
+    }
+}
+
+/// Top word of `T`, for building `Bounds`.
+pub fn top<T: Word>() -> u256 {
+    T::max_word()
+}
+
+#[test]
+fn get_and_with_address_each_argument() {
+    let x = Input::three(1, 2, 3)
+    assert!(x.get(0) == 1 && x.get(1) == 2 && x.get(2) == 3)
+    let y = x.with(1, 9)
+    assert!(y.same(Input::three(1, 9, 3)))
+    assert!(x.same(Input::three(1, 2, 3)))
+}
+
+#[test]
+fn restrict_swaps_reversed_ranges() {
+    let b = Bounds::full(255, 255, 0).restrict(1, lo: 50, hi: 10)
+    assert!(b.lo.w1 == 10 && b.hi.w1 == 50)
+    assert!(b.hi.w0 == 255)
+}

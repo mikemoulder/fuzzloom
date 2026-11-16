@@ -6,3 +6,4 @@ pub use shrink::{Shrunk, shrink}
 pub use payload::{Counterexample, Passed, Replayed, Generated, Digest}
 pub use check::{Report, find, find_all, conclude, check, check_range, replay, input_at}
 pub use diff::{fold, digest_of, digest}
+pub use input::{Input, Bounds, MAX_ARITY, top}
