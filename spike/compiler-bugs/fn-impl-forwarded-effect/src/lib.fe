@@ -2,6 +2,13 @@
 // A struct implements `Fn(u256) -> _` with `uses E = P::E` (forwarding the
 // wrapped callable's effect row), and is then called through a generic
 // `F: Fn(u256) -> bool` bound.
+//
+// Second trigger, seen while building fuzzloom: the same crash occurs with a
+// crate-local trait instead of `Fn`, when a generic function wraps its OWN
+// callable type parameter (e.g. `fn shrink<T, P: Fn(T) -> bool>(p: own P)`
+// building `Prop1<T, P> { f: p }`, whose impl has `uses E = P::E`) and passes
+// the wrapper to another function through a generic trait bound. Wrapping a
+// concrete closure or function item at the call site works.
 
 struct Negate<P> {
     inner: P,
