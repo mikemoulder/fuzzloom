@@ -189,11 +189,11 @@ fn kav_target(_ x: u64) -> u64 {
 fn known_answer_digest_matches_on_every_backend() {
     // Recorded identically from sonatina and native. Every backend's test run
     // checks itself against this one constant, so a backend that computes
-    // the fold, the generator or the PRNG differently fails here. Unchanged
-    // by the multi-argument refactor: single-argument draws consume the same
-    // random stream as before.
+    // the fold, the generator or the PRNG differently fails here.
+    // Re-recorded (on both backends) when range sampling moved from modulo
+    // reduction to rejection sampling, which intentionally changed the stream.
     let d = digest_of(target1(kav_target), seed: 12345, runs: 10000)
     assert!(
-        d == 0x6e8bfbbd6b85134f314e6442618a6073d4a564791d0fbc3d568948fe62d91015,
+        d == 0x4fe7ee18bc39b26b26bc0d3110bc7fdc16b3e184337095313705a1c15fde6adf,
     )
 }

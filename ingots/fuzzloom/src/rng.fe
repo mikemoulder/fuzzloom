@@ -34,13 +34,36 @@ impl Rng {
         (a << 192) | (b << 128) | (c << 64) | d
     }
 
-    /// Uniform-ish value in `0..=max` (modulo bias is accepted for test generation).
+    /// Uniform value in `0..=max`, by masked rejection sampling: draw from
+    /// the smallest power-of-two range covering `max` and retry above it.
+    /// Unbiased for every `max`, at fewer than two draws on average. Maxima
+    /// below 2^64 consume one 64-bit draw per attempt.
     pub fn below_or_eq(mut self, _ max: u256) -> u256 {
-        let r = self.next_u256()
         if max == u256::max() {
-            return r
+            return self.next_u256()
         }
-        r % (max + 1)
+        var bits: u256 = 0
+        var v = max
+        while v != 0 {
+            v = v >> 1
+            bits += 1
+        }
+        let mask: u256 = if bits == 256 {
+            u256::max()
+        } else {
+            (1 << bits) - 1
+        }
+        if max <= 0xFFFFFFFFFFFFFFFF {
+            while true {
+                let c = (self.next_u64() as u256) & mask
+                if c <= max { return c }
+            }
+        }
+        while true {
+            let c = self.next_u256() & mask
+            if c <= max { return c }
+        }
+        0
     }
 }
 
@@ -95,6 +118,18 @@ fn known_answer_vector() {
 }
 
 #[test]
+fn below_or_eq_handles_full_width_maxima() {
+    // Regression: a 256-bit max made the mask computation shift 1 << 256.
+    var r = Rng::new(12)
+    let max: u256 = 0x8000000000000000000000000000000000000000000000000000000000000001
+    var i: u64 = 0
+    while i < 200 {
+        assert!(r.below_or_eq(max) <= max)
+        i += 1
+    }
+}
+
+#[test]
 fn below_or_eq_respects_bound() {
     var r = Rng::new(9)
     var i: u64 = 0
@@ -121,4 +156,22 @@ fn derived_seeds_differ_per_property_and_base() {
     let c = derive_seed(8, 1)
     assert!(a != b && a != c && b != c)
     assert!(derive_seed(7, 1) == a)
+}
+
+#[test]
+fn below_or_eq_is_unbiased_for_non_power_of_two_ranges() {
+    // max is about 2/3 of 2^256. Reducing a 256-bit draw modulo max + 1
+    // gives the lower third double weight, so P(x <= max / 2) would be
+    // about 2/3. Unbiased sampling gives 1/2.
+    let max: u256 = 0xAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA
+    var r = Rng::new(31)
+    var low: u64 = 0
+    var i: u64 = 0
+    while i < 4000 {
+        if r.below_or_eq(max) <= max / 2 {
+            low += 1
+        }
+        i += 1
+    }
+    assert!(low > 1800 && low < 2200)
 }
