@@ -1,0 +1,170 @@
+//! vault-math: share accounting for a tokenized vault (ERC-4626 style),
+//! with four planted bugs for Fuzzloom to find. Each bug is marked
+//! `PLANTED BUG` with its fix next to it.
+//!
+//! Conventions Fuzzloom discovers without configuration:
+//!   pub fn prop_<name>(args...) -> bool   a property (1 to 3 Word arguments)
+//!
+//! All four bugs pass the hand-written tests at the bottom of this file.
+
+/// Protocol fee: 30 basis points.
+pub const FEE_BPS: u64 = 30
+pub const BPS: u64 = 10000
+
+// ------------------------------------------------------------------ fees
+
+/// Fee charged on `amount`, rounded down.
+///
+/// PLANTED BUG (boundary): the multiplication wraps for amounts above
+/// u64::MAX / 30, so very large deposits pay almost no fee.
+/// Fix: widen first, `((amount as u128) * 30 / 10000).downcast_truncate()`.
+pub fn fee(_ amount: u64) -> u64 {
+    amount.wrapping_mul(FEE_BPS) / BPS
+}
+
+/// Exact reference fee computed in u128.
+pub fn fee_exact(_ amount: u64) -> u64 {
+    let f: u128 = (amount as u128) * (FEE_BPS as u128) / (BPS as u128)
+    f.downcast_truncate()
+}
+
+/// The fee matches exact arithmetic for every amount.
+pub fn prop_fee_matches_exact_math(_ amount: u64) -> bool {
+    fee(amount) == fee_exact(amount)
+}
+
+/// Correct property (passes): the fee never exceeds the amount.
+pub fn prop_fee_exact_never_exceeds_amount(_ amount: u64) -> bool {
+    fee_exact(amount) <= amount
+}
+
+// ------------------------------------------------------------ withdrawals
+
+/// Whether a withdrawal of `amount` from `balance` is allowed.
+///
+/// PLANTED BUG (off by one between two arguments): `<=` against
+/// `balance + 1` admits a withdrawal one unit larger than the balance.
+/// Fix: `amount <= balance`.
+pub fn can_withdraw(_ balance: u128, _ amount: u128) -> bool {
+    if balance == u128::max() {
+        return true
+    }
+    amount <= balance + 1
+}
+
+/// An allowed withdrawal never exceeds the balance.
+pub fn prop_withdraw_never_overdraws(_ balance: u128, _ amount: u128) -> bool {
+    !can_withdraw(balance, amount) || amount <= balance
+}
+
+// ------------------------------------------------------ shares and assets
+//
+// Conversions use virtual shares and assets (an offset of one, as in
+// OpenZeppelin's ERC4626), so an empty or donated-to vault cannot be used
+// to mint shares against assets the depositor did not bring.
+//
+// History: the first version of this example minted 1:1 whenever the share
+// supply was zero. Fuzzloom flagged it immediately with the shrunk input
+// (assets 1, total_assets 1, total_supply 0): a vault holding donated
+// assets and no shares lets the first depositor redeem the donation. That
+// is the known ERC-4626 first-depositor issue, so the model was fixed.
+
+/// Shares minted for depositing `assets` into a vault holding
+/// `total_assets` with `total_supply` shares outstanding. Rounds down, in
+/// favour of the vault.
+pub fn preview_deposit(_ assets: u64, _ total_assets: u64, _ total_supply: u64) -> u128 {
+    (assets as u128) * ((total_supply as u128) + 1) / ((total_assets as u128) + 1)
+}
+
+/// Assets paid out for redeeming `shares`.
+///
+/// PLANTED BUG (rounding direction): rounds up, in favour of the user.
+/// EIP-4626 requires rounding toward the vault, otherwise repeated small
+/// redemptions drain value from the remaining shareholders.
+/// Fix: drop the `+ total_supply` term to round down.
+pub fn preview_redeem(_ shares: u128, _ total_assets: u64, _ total_supply: u64) -> u128 {
+    let ta = (total_assets as u128) + 1
+    let ts = (total_supply as u128) + 1
+    (shares * ta + (ts - 1)) / ts
+}
+
+/// Redemption rounds toward the vault: it never pays more than the exact
+/// pro-rata amount `shares * (total_assets + 1) / (total_supply + 1)`.
+pub fn prop_redeem_rounds_toward_vault(
+    _ shares: u64,
+    _ total_assets: u64,
+    _ total_supply: u64,
+) -> bool {
+    let paid = preview_redeem(shares as u128, total_assets, total_supply)
+    paid * ((total_supply as u128) + 1) <= (shares as u128) * ((total_assets as u128) + 1)
+}
+
+/// Correct property (passes): depositing then immediately redeeming never
+/// returns more than was deposited.
+pub fn prop_deposit_redeem_no_profit(
+    _ assets: u64,
+    _ total_assets: u64,
+    _ total_supply: u64,
+) -> bool {
+    let shares = preview_deposit(assets, total_assets, total_supply)
+    let ta = (total_assets as u128) + (assets as u128)
+    let ts = (total_supply as u128) + shares
+    if ta > (u64::max() as u128) || ts > (u64::max() as u128) {
+        return true // outside the modelled range
+    }
+    preview_redeem(shares, ta.downcast_truncate(), ts.downcast_truncate()) <= (assets as u128)
+}
+
+/// Correct property (passes): more assets never mint fewer shares.
+pub fn prop_deposit_is_monotone(_ a: u64, _ b: u64, _ total_assets: u64) -> bool {
+    let supply: u64 = 1000000
+    if a > b { return true }
+    preview_deposit(a, total_assets, supply) <= preview_deposit(b, total_assets, supply)
+}
+
+// ------------------------------------------------------------ share price
+
+/// Price of one share in assets, scaled by 1e18.
+///
+/// PLANTED BUG (panic): no guard for an empty vault, so a zero supply
+/// divides by zero and aborts instead of returning a price.
+/// Fix: `if total_supply == 0 { return 1000000000000000000 }`.
+pub fn share_price(_ total_assets: u64, _ total_supply: u64) -> u128 {
+    (total_assets as u128) * 1000000000000000000 / (total_supply as u128)
+}
+
+/// The share price is defined for every vault state (it never aborts), and
+/// rounds down: it never exceeds the exact ratio. A price of 0 for a tiny
+/// ratio is expected fixed-point rounding, not a bug.
+pub fn prop_share_price_defined(_ total_assets: u64, _ total_supply: u64) -> bool {
+    let p = share_price(total_assets, total_supply)
+    total_supply == 0 || p * (total_supply as u128) <= (total_assets as u128) * 1000000000000000000
+}
+
+// --------------------------------- the hand-written tests (all pass)
+
+#[test]
+fn fee_on_typical_amounts() {
+    assert!(fee(10000) == 30)
+    assert!(fee(1000000) == 3000)
+    assert!(fee(0) == 0)
+}
+
+#[test]
+fn withdraw_within_balance() {
+    assert!(can_withdraw(balance: 100, amount: 50))
+    assert!(can_withdraw(balance: 100, amount: 100))
+    assert!(!can_withdraw(balance: 100, amount: 500))
+}
+
+#[test]
+fn deposit_and_redeem_round_trip() {
+    let shares = preview_deposit(1000, 999999, 999999)
+    assert!(shares == 1000)
+    assert!(preview_redeem(shares, 1000999, 1000999) == 1000)
+}
+
+#[test]
+fn share_price_of_a_funded_vault() {
+    assert!(share_price(2000, 1000) == 2000000000000000000)
+}
