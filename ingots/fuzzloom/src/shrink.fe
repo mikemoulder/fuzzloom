@@ -6,12 +6,18 @@
 //!    take the first that fails. Small counterexamples are the most readable,
 //!    and this finds them exactly.
 //! 2. Greedy descent: from the best failing word, try stepping down by the
-//!    full distance to `lo`, then half of it, and so on to 1. The first
-//!    candidate that still fails becomes the new best and the scan restarts.
-//!    It stops at a word where no step of 2^k toward `lo` still fails (a local
-//!    minimum, not necessarily the global one), or when the budget runs out.
+//!    floor `lo` itself, then by exact powers of two (2^k for k from the top
+//!    bit of the distance down to 0). The first candidate that still fails
+//!    becomes the new best and the scan restarts.
+//!
+//! Guarantee when `complete` is true: the result fails, `lo` passes (unless
+//! the result is `lo`), and no `result - 2^k >= lo` fails. That is a local
+//! minimum, not necessarily the global one. Exact powers of two matter: steps
+//! of `best / 2^j` can all share a parity, which under zigzag encoding means
+//! all share a sign, and the descent then stalls on the first input.
 
 use ingot::word::Word
+use ingot::bias::bit_len
 
 /// Width of the small-value sweep in phase 1.
 pub const SWEEP: u256 = 256
@@ -49,23 +55,37 @@ uses P::E
         c += 1
     }
 
-    // Phase 2: greedy descent.
+    // Phase 2: greedy descent by exact powers of two. Each round first
+    // tries `lo` itself, then best - 2^k for k from the top bit of the
+    // distance down to 0, and restarts from the first candidate that fails.
     var progressed = true
     while progressed {
         progressed = false
-        var step = best - lo
-        while step > 0 {
-            if attempts >= budget {
-                return Shrunk { value: best, attempts, complete: false }
-            }
-            let candidate = best - step
-            attempts += 1
-            if !holds(T::from_word(candidate)) {
-                best = candidate
-                progressed = true
-                step = 0
-            } else {
-                step = step / 2
+        if best == lo {
+            return Shrunk { value: best, attempts, complete: true }
+        }
+        if attempts >= budget {
+            return Shrunk { value: best, attempts, complete: false }
+        }
+        attempts += 1
+        if !holds(T::from_word(lo)) {
+            return Shrunk { value: lo, attempts, complete: true }
+        }
+        var k = bit_len(best - lo)
+        while k > 0 {
+            k -= 1
+            let step: u256 = 1 << k
+            if step <= best - lo {
+                if attempts >= budget {
+                    return Shrunk { value: best, attempts, complete: false }
+                }
+                attempts += 1
+                let candidate = best - step
+                if !holds(T::from_word(candidate)) {
+                    best = candidate
+                    progressed = true
+                    k = 0
+                }
             }
         }
     }
@@ -152,4 +172,33 @@ fn never_returns_a_passing_value() {
         budget: 10000,
     )
     assert!(r.value == 4242)
+}
+
+#[test]
+fn power_of_two_steps_cross_parity() {
+    // Regression: best = 2^38 - 1 with best / 2^j steps made every candidate
+    // even, so an odd-only failure never shrank. Failing set: odd words >= 1999.
+    let r = shrink(
+        |w: u256| !(w % 2 == 1 && w >= 1999),
+        failing: 0x3fffffffff,
+        lo: 0,
+        budget: 10000,
+    )
+    assert!(r.value == 1999 && r.complete)
+}
+
+#[test]
+fn complete_result_is_a_verified_local_minimum() {
+    let holds = |w: u256| !(w > 300 && (w % 3 == 0 || w % 5 == 0))
+    let r = shrink(holds, failing: 999999, lo: 0, budget: 100000)
+    assert!(r.complete)
+    assert!(!holds(r.value))
+    var k: u256 = 0
+    while k < 256 {
+        let step: u256 = 1 << k
+        if step <= r.value {
+            assert!(holds(r.value - step))
+        }
+        k += 1
+    }
 }
