@@ -11,7 +11,7 @@ case "$(uname -s)" in
   MINGW*|MSYS*|CYGWIN*)
     FE_WIN="${FE_BIN:-$HOME/.fe/bin/fe.exe}"
     DISTRO="${FE_WSL_DISTRO:-Ubuntu-24.04}"
-    WSL_ROOT="$(wsl -d "$DISTRO" -- wslpath -a "$(cygpath -w "$ROOT")" | tr -d '\r')"
+    WSL_ROOT="$(wsl -d "$DISTRO" -- wslpath -a "$(cygpath -m "$ROOT")" | tr -d '\r')"
     echo "== sonatina (EVM)"
     (cd "$ROOT" && "$FE_WIN" test --color never "${ARGS[@]}") || status=1
     echo "== native (WSL $DISTRO)"
