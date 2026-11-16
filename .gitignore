@@ -34,3 +34,6 @@ Thumbs.db
 # When README.md links a new .md file, add a matching !path line below.
 *.md
 !README.md
+
+# Spike scratch harnesses
+.tmp/
