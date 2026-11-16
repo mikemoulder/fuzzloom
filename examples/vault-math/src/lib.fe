@@ -4,6 +4,7 @@
 //!
 //! Conventions Fuzzloom discovers without configuration:
 //!   pub fn prop_<name>(args...) -> bool   a property (1 to 3 Word arguments)
+//!   pub fn diff_<name>(args...) -> U      a differential target (U: Word)
 //!
 //! All four bugs pass the hand-written tests at the bottom of this file.
 
@@ -139,6 +140,44 @@ pub fn share_price(_ total_assets: u64, _ total_supply: u64) -> u128 {
 pub fn prop_share_price_defined(_ total_assets: u64, _ total_supply: u64) -> bool {
     let p = share_price(total_assets, total_supply)
     total_supply == 0 || p * (total_supply as u128) <= (total_assets as u128) * 1000000000000000000
+}
+
+// -------------------------------------------------- differential targets
+
+/// Full-precision a * b / d in u256, the core of every vault conversion.
+pub fn diff_mul_div(_ a: u128, _ b: u128, _ d: u128) -> u256 {
+    if d == 0 { return 0 }
+    (a as u256) * (b as u256) / (d as u256)
+}
+
+/// Signed accounting: net position after a gain and a loss, wrapping.
+pub fn diff_net_position(_ gain: i128, _ loss: i128) -> i128 {
+    gain.wrapping_sub(loss)
+}
+
+/// Fee calculation, buggy or not, must at least agree across backends.
+pub fn diff_fee(_ amount: u64) -> u64 {
+    fee(amount)
+}
+
+/// PLANTED DIVERGENCE: rounding that depends on the compilation target.
+/// This is what the differential command exists to catch: shared logic
+/// that silently behaves differently on native and on the EVM.
+pub fn diff_rounding_mode(_ x: u64) -> u64 {
+    if x % 1000 == 999 {
+        return x / 10 + rounding_bias()
+    }
+    x / 10
+}
+
+#[cfg(target = "evm")]
+fn rounding_bias() -> u64 {
+    0
+}
+
+#[cfg(target = "native")]
+fn rounding_bias() -> u64 {
+    1
 }
 
 // --------------------------------- the hand-written tests (all pass)
