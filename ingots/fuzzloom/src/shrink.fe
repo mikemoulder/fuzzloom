@@ -15,15 +15,17 @@
 //!
 //! Multi-argument inputs are shrunk in rounds until a round changes nothing.
 //! Each round shrinks one coordinate at a time, holding the others fixed,
-//! then lowers all coordinates together (all to the floor, then all by the
-//! same 2^k). The joint move is what escapes diagonals such as `a == b` or
-//! `b == a + 1`, where every single-coordinate move passes. The sweep runs
+//! then lowers all coordinates together: all to the floor, all scaled down
+//! by the gcd of their distances (or halved), and all by the same 2^k. The
+//! joint moves escape relations such as `a == b`, `b == a + 1` and
+//! `b == 2a`, where every single-coordinate move passes. The sweep runs
 //! only in the first round; later rounds use greedy descent, which already
 //! re-checks the floor.
 //!
 //! Guarantee when `complete` is true: the result fails; for every argument
-//! i, replacing word i by any `w_i - 2^k >= lo_i` (others fixed) passes; and
-//! lowering every argument by the same 2^k (staying >= the floors) passes.
+//! i, replacing word i by any `w_i - 2^k >= lo_i` (others fixed) passes;
+//! lowering every argument by the same 2^k (staying >= the floors) passes;
+//! and dividing every distance by their gcd, or by 2, passes.
 //! That is a local minimum under those moves, not necessarily the global
 //! one. When the budget runs out, `complete` is false and the result
 //! is the best failing input found so far (it still fails).
@@ -157,10 +159,32 @@ uses P::E
     Shrunk { input: best, attempts, complete: true }
 }
 
-/// Lowers every argument together: first all to their floors, then all by
-/// the same 2^k (k from the top bit of the smallest distance down to 0).
-/// This moves along diagonals such as `a == b` or `b == a + 1`, where every
-/// single-coordinate move passes and coordinate descent is stuck.
+/// Greatest common divisor of the arguments' distances from their floors
+/// (0 if every argument is at its floor).
+pub fn gcd_of_distances(_ x: Input, _ floor: Input, _ arity: u64) -> u256 {
+    var g: u256 = 0
+    var i: u64 = 0
+    while i < arity {
+        var a = g
+        var b = x.get(i) - floor.get(i)
+        while b != 0 {
+            let t = a % b
+            a = b
+            b = t
+        }
+        g = a
+        i += 1
+    }
+    g
+}
+
+/// Lowers every argument together. First all to their floors; then, each
+/// round, scale all distances down by their gcd (or by 2 when the gcd is 1),
+/// then lower all by the same 2^k (k from the top bit of the smallest
+/// distance down to 0). Scaling follows proportional relations such as
+/// `b == 2a`; equal steps follow diagonals such as `a == b` or `b == a + 1`.
+/// In both cases every single-coordinate move passes, so coordinate descent
+/// alone is stuck.
 pub fn shrink_jointly<P: Property>(_ p: P, _ x: Input, _ floor: Input, budget: u64) -> Shrunk
 uses P::E
 {
@@ -183,6 +207,33 @@ uses P::E
     var progressed = true
     while progressed {
         progressed = false
+
+        // Proportional moves: divide every distance from the floor by their
+        // gcd, or failing that halve them all. These follow relations such
+        // as b == 2a, which equal steps cannot.
+        let g = gcd_of_distances(best, floor, arity)
+        var divisor: u256 = 0
+        if g > 1 {
+            divisor = g
+        } else if g == 1 { divisor = 2 }
+        if divisor > 1 {
+            if attempts >= budget {
+                return Shrunk { input: best, attempts, complete: false }
+            }
+            attempts += 1
+            var c = best
+            i = 0
+            while i < arity {
+                c = c.with(i, floor.get(i) + (best.get(i) - floor.get(i)) / divisor)
+                i += 1
+            }
+            if !c.same(best) && !p.holds(c) {
+                best = c
+                progressed = true
+            }
+        }
+        if progressed { continue }
+
         var room = best.get(0) - floor.get(0)
         i = 1
         while i < arity {
@@ -433,4 +484,59 @@ fn three_argument_result_is_a_coordinate_wise_local_minimum() {
         }
         k += 1
     }
+}
+
+fn doubled(_ a: u256, _ b: u256) -> bool {
+    // Fails only when b is exactly twice a (a > 0): a proportional relation
+    // that equal steps cannot follow.
+    !(a > 0 && b == 2 * a)
+}
+
+#[test]
+fn proportional_relations_shrink_to_smallest_ratio() {
+    use ingot::property::prop2
+    let r = shrink_input(
+        prop2(doubled),
+        failing: Input::two(123456, 246912),
+        floor: Input::zero(),
+        budget: 100000,
+    )
+    assert!(r.complete && r.input.w0 == 1 && r.input.w1 == 2)
+}
+
+#[test]
+fn complete_result_is_minimal_under_scaling_moves() {
+    use ingot::property::prop3
+    let p = prop3(coupled)
+    let r = shrink_input(
+        p,
+        failing: Input::three(400000, 300000, 200000),
+        floor: Input::zero(),
+        budget: 100000,
+    )
+    assert!(r.complete && !p.holds(r.input))
+    let g = gcd_of_distances(r.input, Input::zero(), 3)
+    if g > 1 {
+        assert!(
+            p.holds(
+                Input::three(r.input.w0 / g, r.input.w1 / g, r.input.w2 / g),
+            ),
+        )
+    }
+    assert!(
+        p.holds(
+            Input::three(r.input.w0 / 2, r.input.w1 / 2, r.input.w2 / 2),
+        ),
+    )
+}
+
+#[test]
+fn gcd_of_distances_ignores_arguments_at_the_floor() {
+    assert!(
+        gcd_of_distances(Input::three(12, 18, 0), Input::zero(), 3) == 6,
+    )
+    assert!(
+        gcd_of_distances(Input::three(15, 25, 7), Input::three(5, 5, 7), 3) == 10,
+    )
+    assert!(gcd_of_distances(Input::zero(), Input::zero(), 3) == 0)
 }
