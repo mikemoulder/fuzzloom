@@ -1,0 +1,116 @@
+//! Failure shrinking for word inputs.
+//!
+//! Two phases, neither of which needs the failure to be monotone:
+//!
+//! 1. Small-value sweep: try `lo, lo + 1, ..., lo + SWEEP - 1` in order and
+//!    take the first that fails. Small counterexamples are the most readable,
+//!    and this finds them exactly.
+//! 2. Greedy descent: from the best failing word, try stepping down by the
+//!    full distance to `lo`, then half of it, and so on to 1. The first
+//!    candidate that still fails becomes the new best and the scan restarts.
+//!    It stops at a word where no step of 2^k toward `lo` still fails (a local
+//!    minimum, not necessarily the global one), or when the budget runs out.
+
+/// Width of the small-value sweep in phase 1.
+pub const SWEEP: u256 = 256
+
+/// Result of a shrink.
+pub struct Shrunk {
+    /// Smallest failing word found.
+    pub value: u256,
+    /// Number of times the failure predicate was evaluated.
+    pub attempts: u64,
+    /// True if shrinking reached a local minimum, false if the budget ran out.
+    pub complete: bool,
+}
+
+impl Copy for Shrunk {}
+
+/// Shrinks `failing` toward `lo`. `fails(w)` must return true when `w` still
+/// reproduces the original failure.
+pub fn shrink_word<P: Fn(u256) -> bool>(_ fails: P, failing: u256, lo: u256, budget: u64) -> Shrunk uses P::E {
+    var best = failing
+    var attempts: u64 = 0
+
+    // Phase 1: small-value sweep.
+    var c = lo
+    while c < best && c - lo < SWEEP {
+        if attempts >= budget {
+            return Shrunk { value: best, attempts, complete: false }
+        }
+        attempts += 1
+        if fails(c) {
+            return Shrunk { value: c, attempts, complete: true }
+        }
+        c += 1
+    }
+
+    // Phase 2: greedy descent.
+    var progressed = true
+    while progressed {
+        progressed = false
+        var step = best - lo
+        while step > 0 {
+            if attempts >= budget {
+                return Shrunk { value: best, attempts, complete: false }
+            }
+            let candidate = best - step
+            attempts += 1
+            if fails(candidate) {
+                best = candidate
+                progressed = true
+                step = 0
+            } else {
+                step = step / 2
+            }
+        }
+    }
+    Shrunk { value: best, attempts, complete: true }
+}
+
+#[test]
+fn shrinks_threshold_failure_to_the_threshold() {
+    let r = shrink_word(|w: u256| w >= 1000, failing: 98765, lo: 0, budget: 10000)
+    assert!(r.value == 1000)
+    assert!(r.complete)
+}
+
+#[test]
+fn shrinks_to_floor_when_everything_fails() {
+    let r = shrink_word(|w: u256| true, failing: u256::max(), lo: 5, budget: 10000)
+    assert!(r.value == 5)
+}
+
+#[test]
+fn handles_non_monotone_failures() {
+    // Fails only on multiples of 7 above 100: the answer is 105, which a
+    // plain binary search over a monotone predicate can miss.
+    let r = shrink_word(|w: u256| w > 100 && w % 7 == 0, failing: 7000, lo: 0, budget: 10000)
+    assert!(r.value == 105)
+}
+
+#[test]
+fn shrinks_top_of_u64_window() {
+    let r = shrink_word(|w: u256| w > 0xFFFFFFFFFFFFFF00 && w <= 0xFFFFFFFFFFFFFFFF, failing: 0xFFFFFFFFFFFFFFF3, lo: 0, budget: 10000)
+    assert!(r.value == 0xFFFFFFFFFFFFFF01)
+}
+
+#[test]
+fn respects_budget() {
+    let r = shrink_word(|w: u256| w >= 1000000, failing: u256::max(), lo: 0, budget: 3)
+    assert!(!r.complete)
+    assert!(r.attempts == 3)
+    assert!(r.value == u256::max())
+}
+
+#[test]
+fn sweep_finds_small_exact_answer() {
+    let r = shrink_word(|w: u256| w == 0 || w >= 37, failing: 900000, lo: 1, budget: 10000)
+    assert!(r.value == 37)
+}
+
+#[test]
+fn never_returns_a_passing_value() {
+    let r = shrink_word(|w: u256| w == 4242, failing: 4242, lo: 0, budget: 10000)
+    assert!(r.value == 4242)
+}
