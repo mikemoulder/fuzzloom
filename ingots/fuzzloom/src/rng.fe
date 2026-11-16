@@ -44,6 +44,23 @@ impl Rng {
     }
 }
 
+/// splitmix64 finaliser (Steele, Lea, Flood, 2014): a bijective mixer with
+/// strong avalanche, so nearby inputs give unrelated outputs.
+pub fn splitmix64(_ x: u64) -> u64 {
+    var z = x.wrapping_add(0x9E3779B97F4A7C15)
+    z = (z ^ (z >> 30)).wrapping_mul(0xBF58476D1CE4E5B9)
+    z = (z ^ (z >> 27)).wrapping_mul(0x94D049BB133111EB)
+    z ^ (z >> 31)
+}
+
+/// Derives an independent campaign seed for one property from a base seed
+/// and a property id (the CLI uses the FNV-1a hash of the property name).
+/// Without this, every property in a run would see the same input stream,
+/// so a blind spot in that stream would be shared by all of them.
+pub fn derive_seed(_ base: u64, _ property_id: u64) -> u64 {
+    splitmix64(base ^ splitmix64(property_id))
+}
+
 #[test]
 fn same_seed_same_stream() {
     var a = Rng::new(42)
@@ -86,4 +103,22 @@ fn below_or_eq_respects_bound() {
         i += 1
     }
     assert!(r.below_or_eq(0) == 0)
+}
+
+#[test]
+fn splitmix64_matches_reference_vectors() {
+    // Reference outputs of the splitmix64 sequence seeded with 0: each value
+    // is splitmix64 applied to k * 0x9E3779B97F4A7C15 for k = 0, 1, 2.
+    assert!(splitmix64(0) == 0xE220A8397B1DCDAF)
+    assert!(splitmix64(0x9E3779B97F4A7C15) == 0x6E789E6AA1B965F4)
+    assert!(splitmix64(0x3C6EF372FE94F82A) == 0x06C45D188009454F)
+}
+
+#[test]
+fn derived_seeds_differ_per_property_and_base() {
+    let a = derive_seed(7, 1)
+    let b = derive_seed(7, 2)
+    let c = derive_seed(8, 1)
+    assert!(a != b && a != c && b != c)
+    assert!(derive_seed(7, 1) == a)
 }
