@@ -1,0 +1,72 @@
+//! A single 256-bit representation for every input type Fuzzloom generates.
+//!
+//! Generation, shrinking and reporting all operate on `u256` words. A type
+//! takes part by mapping itself to and from a word, which lets one generic
+//! runner serve every integer width and keeps payloads uniform for tooling.
+
+pub trait Word {
+    /// The largest word value this type can represent.
+    fn max_word() -> u256
+    /// Reinterprets a word as this type. Callers keep `w <= max_word()`.
+    fn from_word(_ w: u256) -> Self
+    /// Widens this value to a word.
+    fn to_word(self) -> u256
+}
+
+impl Word for u8 {
+    fn max_word() -> u256 { 0xFF }
+    fn from_word(_ w: u256) -> u8 { w.downcast_truncate() }
+    fn to_word(self) -> u256 { self as u256 }
+}
+
+impl Word for u16 {
+    fn max_word() -> u256 { 0xFFFF }
+    fn from_word(_ w: u256) -> u16 { w.downcast_truncate() }
+    fn to_word(self) -> u256 { self as u256 }
+}
+
+impl Word for u32 {
+    fn max_word() -> u256 { 0xFFFFFFFF }
+    fn from_word(_ w: u256) -> u32 { w.downcast_truncate() }
+    fn to_word(self) -> u256 { self as u256 }
+}
+
+impl Word for u64 {
+    fn max_word() -> u256 { 0xFFFFFFFFFFFFFFFF }
+    fn from_word(_ w: u256) -> u64 { w.downcast_truncate() }
+    fn to_word(self) -> u256 { self as u256 }
+}
+
+impl Word for u128 {
+    fn max_word() -> u256 { 0xFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFF }
+    fn from_word(_ w: u256) -> u128 { w.downcast_truncate() }
+    fn to_word(self) -> u256 { self as u256 }
+}
+
+impl Word for u256 {
+    fn max_word() -> u256 { u256::max() }
+    fn from_word(_ w: u256) -> u256 { w }
+    fn to_word(self) -> u256 { self }
+}
+
+impl Word for bool {
+    fn max_word() -> u256 { 1 }
+    fn from_word(_ w: u256) -> bool { w != 0 }
+    fn to_word(self) -> u256 { if self { 1 } else { 0 } }
+}
+
+#[test]
+fn round_trips_at_the_type_maximum() {
+    assert!(u8::from_word(u8::max_word()) == 255)
+    assert!(u16::from_word(u16::max_word()).to_word() == 0xFFFF)
+    assert!(u64::from_word(u64::max_word()) == u64::max())
+    assert!(u128::from_word(u128::max_word()) == u128::max())
+    assert!(u256::from_word(u256::max_word()) == u256::max())
+}
+
+#[test]
+fn bool_maps_to_zero_and_one() {
+    assert!(bool::from_word(0) == false)
+    assert!(bool::from_word(1) == true)
+    assert!(true.to_word() == 1 && false.to_word() == 0)
+}
