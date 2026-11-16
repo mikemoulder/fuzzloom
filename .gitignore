@@ -35,6 +35,14 @@ Thumbs.db
 *.md
 !README.md
 
+# Fe debugging reports (fe build/test --report)
+*.tar.gz
+
+# Fuzzloom: generated harnesses are scratch; failure records are meant to be
+# committed in user projects, except the example's, which every demo run
+# regenerates.
+**/.fuzzloom/tmp/
+examples/*/.fuzzloom/failures/
+
 # Spike scratch harnesses
 .tmp/
-node_modules/
