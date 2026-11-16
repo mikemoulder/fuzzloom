@@ -1,0 +1,124 @@
+//! Properties of one to three arguments.
+//!
+//! A property is any callable returning `bool` whose arguments implement
+//! `Word`. Wrap it with `prop1`, `prop2` or `prop3`; the argument types are
+//! inferred from the callable, so a harness writes `check(prop2(f), ...)`.
+//! The wrappers forward the callable's effect row, so properties may use
+//! effects such as `Evm` (on the EVM backend) like any other Fe function.
+
+use ingot::word::Word
+use ingot::input::{Bounds, Input}
+
+/// A property over an `Input`. `holds` returns false on a counterexample.
+pub trait Property {
+    uses E
+    /// Number of arguments, 1 to 3.
+    fn arity() -> u64
+    /// Every value of each argument type.
+    fn full_bounds() -> Bounds
+    fn holds(self, _ x: Input) -> bool uses E
+}
+
+pub struct Prop1<A, F> { pub f: F }
+
+pub struct Prop2<A, B, F> { pub f: F }
+
+pub struct Prop3<A, B, C, F> { pub f: F }
+
+impl<A: Word, F: Fn(A) -> bool> Property for Prop1<A, F> {
+    uses E = F::E
+
+    fn arity() -> u64 {
+        1
+    }
+
+    fn full_bounds() -> Bounds {
+        Bounds::full(A::max_word(), 0, 0)
+    }
+
+    fn holds(self, _ x: Input) -> bool uses E {
+        (self.f)(A::from_word(x.w0))
+    }
+}
+
+impl<A: Word, B: Word, F: Fn(A, B) -> bool> Property for Prop2<A, B, F> {
+    uses E = F::E
+
+    fn arity() -> u64 {
+        2
+    }
+
+    fn full_bounds() -> Bounds {
+        Bounds::full(A::max_word(), B::max_word(), 0)
+    }
+
+    fn holds(self, _ x: Input) -> bool uses E {
+        (self.f)(A::from_word(x.w0), B::from_word(x.w1))
+    }
+}
+
+impl<A: Word, B: Word, C: Word, F: Fn(A, B, C) -> bool> Property for Prop3<A, B, C, F> {
+    uses E = F::E
+
+    fn arity() -> u64 {
+        3
+    }
+
+    fn full_bounds() -> Bounds {
+        Bounds::full(A::max_word(), B::max_word(), C::max_word())
+    }
+
+    fn holds(self, _ x: Input) -> bool uses E {
+        (self.f)(A::from_word(x.w0), B::from_word(x.w1), C::from_word(x.w2))
+    }
+}
+
+/// Bounds of a property value's argument types (lets callers name `P`
+/// through inference instead of spelling a generic path).
+pub fn bounds_of<P: Property>(_ p: P) -> Bounds {
+    P::full_bounds()
+}
+
+/// Arity of a property value.
+pub fn arity_of<P: Property>(_ p: P) -> u64 {
+    P::arity()
+}
+
+pub fn prop1<A: Word, F: Fn(A) -> bool>(_ f: own F) -> Prop1<A, F> {
+    Prop1 { f }
+}
+
+pub fn prop2<A: Word, B: Word, F: Fn(A, B) -> bool>(_ f: own F) -> Prop2<A, B, F> {
+    Prop2 { f }
+}
+
+pub fn prop3<A: Word, B: Word, C: Word, F: Fn(A, B, C) -> bool>(_ f: own F) -> Prop3<A, B, C, F> {
+    Prop3 { f }
+}
+
+fn lt(_ a: u64, _ b: u8) -> bool {
+    a < (b as u64)
+}
+
+#[test]
+fn wrappers_decode_each_argument_with_its_own_type() {
+    let p = prop2(lt)
+    assert!(p.holds(Input::two(3, 4)))
+    assert!(!p.holds(Input::two(4, 4)))
+    // The u8 argument truncates its word, as Word::from_word specifies.
+    assert!(p.holds(Input::two(3, 0x104)))
+}
+
+#[test]
+fn arity_and_bounds_follow_argument_types() {
+    let p = prop3(|a: u8, b: i16, c: bool| c)
+    let b = bounds_of(p)
+    assert!(arity_of(p) == 3)
+    assert!(b.hi.w0 == 255 && b.hi.w1 == 0xFFFF && b.hi.w2 == 1)
+}
+
+#[test]
+fn signed_and_closures_compose() {
+    let p = prop3(|a: i8, b: i8, c: bool| (a as i16) + (b as i16) < 300 || c)
+    assert!(p.holds(Input::three(0, 0, 0)))
+}
