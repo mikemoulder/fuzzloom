@@ -1,0 +1,80 @@
+//! Differential digests.
+//!
+//! A digest folds a function's outputs over the deterministic input stream
+//! of the default campaign. The same harness built for sonatina and for
+//! native must produce the same digest; if it does not, the CLI bisects on
+//! `runs` (digests are prefix-consistent: the first k folds are the same for
+//! any run count >= k) to find the first input whose outputs differ.
+
+use ingot::rng::Rng
+use ingot::word::Word
+use ingot::gen::{Gen, Range}
+use ingot::bias::Biased
+use ingot::payload::Digest
+use std::evm::revert_error
+
+const FOLD_PRIME: u256 = 0x100000001B3
+const FOLD_OFFSET: u256 = 0xCBF29CE484222325
+
+/// Mixes one output word into the accumulator. Order-sensitive.
+pub fn fold(_ acc: u256, _ out: u256) -> u256 {
+    (acc ^ out).wrapping_mul(FOLD_PRIME).wrapping_add(FOLD_OFFSET)
+}
+
+/// Folds `f` over the first `runs` inputs of the default campaign for `T`.
+pub fn digest_of<T: Word, U: Word, F: Fn(T) -> U>(_ f: F, seed: u64, runs: u64) -> u256 uses F::E {
+    let g = Biased::of(Range::full<T>())
+    var rng = Rng::new(seed)
+    var acc: u256 = FOLD_OFFSET
+    var i: u64 = 0
+    while i < runs {
+        let w = g.gen(mut rng)
+        acc = fold(acc, f(T::from_word(w)).to_word())
+        i += 1
+    }
+    acc
+}
+
+/// Harness entry point: end the test with the digest of `f`.
+pub fn digest<T: Word, U: Word, F: Fn(T) -> U>(_ f: F, seed: u64, runs: u64) -> ! uses F::E {
+    let acc = digest_of(f, seed, runs)
+    revert_error(Digest { seed, runs, acc })
+}
+
+#[test]
+fn digest_is_deterministic() {
+    let a = digest_of(|x: u64| x.wrapping_mul(3), seed: 9, runs: 5000)
+    let b = digest_of(|x: u64| x.wrapping_mul(3), seed: 9, runs: 5000)
+    assert!(a == b)
+}
+
+#[test]
+fn digest_detects_a_single_differing_output() {
+    let a = digest_of(|x: u64| x, seed: 4, runs: 3000)
+    let b = digest_of(|x: u64| if x == 0xFFFFFFFFFFFFFFFF { 0 } else { x }, seed: 4, runs: 3000)
+    assert!(a != b)
+}
+
+#[test]
+fn digest_depends_on_seed_and_runs() {
+    let a = digest_of(|x: u32| x, seed: 1, runs: 100)
+    let b = digest_of(|x: u32| x, seed: 2, runs: 100)
+    let c = digest_of(|x: u32| x, seed: 1, runs: 101)
+    assert!(a != b && a != c)
+}
+
+#[test]
+fn zero_runs_is_the_offset() {
+    assert!(digest_of(|x: u8| x, seed: 1, runs: 0) == FOLD_OFFSET)
+}
+
+fn kav_target(_ x: u64) -> u64 { x.wrapping_mul(0x9E3779B97F4A7C15) ^ (x >> 7) }
+
+#[test]
+fn known_answer_digest_matches_on_every_backend() {
+    // Recorded identically from sonatina and native. Every backend's test run
+    // checks itself against this one constant, so a backend that computes
+    // the fold, the generator or the PRNG differently fails here.
+    let d = digest_of(kav_target, seed: 12345, runs: 10000)
+    assert!(d == 0x6e8bfbbd6b85134f314e6442618a6073d4a564791d0fbc3d568948fe62d91015)
+}
