@@ -37,3 +37,4 @@ Thumbs.db
 
 # Spike scratch harnesses
 .tmp/
+node_modules/

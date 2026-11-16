@@ -1,0 +1,17 @@
+{
+  "name": "@fuzzloom/cli",
+  "version": "0.1.0",
+  "description": "Property-based testing, fuzzing and native/EVM differential testing for Fe",
+  "license": "Apache-2.0",
+  "type": "module",
+  "bin": { "fuzzloom": "./src/index.ts" },
+  "engines": { "node": ">=22.18" },
+  "scripts": {
+    "test": "node --test \"test/**/*.test.ts\"",
+    "typecheck": "tsc --noEmit"
+  },
+  "devDependencies": {
+    "@types/node": "^22.10.0",
+    "typescript": "^5.7.0"
+  }
+}
