@@ -1,2 +1,3 @@
 pub use rng::Rng
 pub use word::Word
+pub use gen::{Gen, Range, Just, Map}

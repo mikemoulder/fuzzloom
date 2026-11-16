@@ -1,0 +1,122 @@
+//! Input generators. Every generator yields a `u256` word that the runner
+//! converts to the property's input type through `Word`.
+
+use ingot::rng::Rng
+use ingot::word::Word
+
+/// Produces input words from a random stream.
+pub trait Gen {
+    uses E
+    fn gen(self, _ rng: mut Rng) -> u256 uses E
+}
+
+/// Uniform over `lo..=hi`.
+pub struct Range {
+    pub lo: u256,
+    pub hi: u256,
+}
+
+impl Range {
+    /// Every value of type `T`.
+    pub fn full<T: Word>() -> Self {
+        Range { lo: 0, hi: T::max_word() }
+    }
+
+    /// `lo..=hi`, swapped if given in the wrong order.
+    pub fn between(lo: u256, hi: u256) -> Self {
+        if lo <= hi { Range { lo, hi } } else { Range { lo: hi, hi: lo } }
+    }
+}
+
+impl Copy for Range {}
+
+impl Gen for Range {
+    uses E = ()
+    fn gen(self, _ rng: mut Rng) -> u256 {
+        self.lo + rng.below_or_eq(self.hi - self.lo)
+    }
+}
+
+/// Always yields the same word. Useful for pinning one input of a pair.
+pub struct Just {
+    pub value: u256,
+}
+
+impl Gen for Just {
+    uses E = ()
+    fn gen(self, _ rng: mut Rng) -> u256 { self.value }
+}
+
+/// Applies `f` to every word produced by `inner`.
+pub struct Map<G, F> {
+    pub inner: G,
+    pub f: F,
+}
+
+impl<G: Gen, F: Fn(u256) -> u256> Gen for Map<G, F> {
+    uses E = (G::E, F::E)
+    fn gen(self, _ rng: mut Rng) -> u256 uses E {
+        let w = self.inner.gen(mut rng)
+        (self.f)(w)
+    }
+}
+
+#[test]
+fn range_full_u8_stays_in_width() {
+    let g = Range::full<u8>()
+    var r = Rng::new(3)
+    var i: u64 = 0
+    while i < 1000 {
+        assert!(g.gen(mut r) <= 255)
+        i += 1
+    }
+}
+
+#[test]
+fn range_between_is_inclusive_and_order_insensitive() {
+    let g = Range::between(lo: 20, hi: 10)
+    var r = Rng::new(5)
+    var saw_lo = false
+    var saw_hi = false
+    var i: u64 = 0
+    while i < 2000 {
+        let w = g.gen(mut r)
+        assert!(w >= 10 && w <= 20)
+        if w == 10 { saw_lo = true }
+        if w == 20 { saw_hi = true }
+        i += 1
+    }
+    assert!(saw_lo && saw_hi)
+}
+
+#[test]
+fn range_full_u256_covers_high_bits() {
+    let g = Range::full<u256>()
+    var r = Rng::new(11)
+    var high = false
+    var i: u64 = 0
+    while i < 64 {
+        if g.gen(mut r) > u128::max_word() { high = true }
+        i += 1
+    }
+    assert!(high)
+}
+
+#[test]
+fn map_applies_closure() {
+    let g = Map { inner: Range::between(lo: 0, hi: 100), f: |w: u256| w * 2 }
+    var r = Rng::new(1)
+    var i: u64 = 0
+    while i < 200 {
+        let w = g.gen(mut r)
+        assert!(w % 2 == 0 && w <= 200)
+        i += 1
+    }
+}
+
+#[test]
+fn just_is_constant() {
+    let g = Just { value: 77 }
+    var r = Rng::new(1)
+    assert!(g.gen(mut r) == 77 && g.gen(mut r) == 77)
+}
