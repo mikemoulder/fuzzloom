@@ -1,0 +1,153 @@
+// Spike probe 1: PRNG + trait-based generators + combinators + property loop + shrink.
+
+pub struct Rng {
+    pub state: u64,
+}
+
+impl Rng {
+    pub fn new(_ seed: u64) -> Self {
+        let s = if seed == 0 { 0x9E3779B97F4A7C15 } else { seed }
+        Rng { state: s }
+    }
+
+    // xorshift64*
+    pub fn next_u64(mut self) -> u64 {
+        var x = self.state
+        x = x ^ (x >> 12)
+        x = x ^ (x << 25)
+        x = x ^ (x >> 27)
+        self.state = x
+        x.wrapping_mul(0x2545F4914F6CDD1D)
+    }
+}
+
+pub trait Gen {
+    uses E
+    type Out
+    fn gen(self, _ rng: mut Rng) -> Self::Out uses E
+}
+
+pub struct U64Range {
+    pub lo: u64,
+    pub hi: u64,
+}
+
+impl Gen for U64Range {
+    uses E = ()
+    type Out = u64
+    fn gen(self, _ rng: mut Rng) -> u64 {
+        let span = self.hi - self.lo
+        if span == 0xFFFFFFFFFFFFFFFF { return rng.next_u64() }
+        self.lo + (rng.next_u64() % (span + 1))
+    }
+}
+
+// Boundary-biased: 1/4 of the time pick from a boundary table.
+pub struct Biased<G> {
+    pub inner: G,
+}
+
+impl<G: Gen<Out = u64>> Gen for Biased<G> {
+    uses E = G::E
+    type Out = u64
+    fn gen(self, _ rng: mut Rng) -> u64 uses E {
+        let r = rng.next_u64()
+        if r % 4 == 0 {
+            let edges: [u64; 6] = [0, 1, 2, 0x7FFFFFFFFFFFFFFF, 0xFFFFFFFFFFFFFFFE, 0xFFFFFFFFFFFFFFFF]
+            return edges[((r >> 8) % 6).downcast_truncate()]
+        }
+        self.inner.gen(mut rng)
+    }
+}
+
+// Map combinator using closures.
+pub struct Map<G, F> {
+    pub inner: G,
+    pub f: F,
+}
+
+impl<G: Gen<Out = u64>, F: Fn(u64) -> u64> Gen for Map<G, F> {
+    uses E = (G::E, F::E)
+    type Out = u64
+    fn gen(self, _ rng: mut Rng) -> u64 uses E {
+        let x = self.inner.gen(mut rng)
+        (self.f)(x)
+    }
+}
+
+// Planted bug: "saturating" add that wraps to 0 near the top.
+fn buggy_sat_add(_ a: u64, _ b: u64) -> u64 {
+    if a > 0xFFFFFFFFFFFFFF00 { return 0 }
+    if b > 0xFFFFFFFFFFFFFFFF - a { return 0xFFFFFFFFFFFFFFFF }
+    a + b
+}
+
+pub struct Outcome {
+    pub failed: bool,
+    pub input: u64,
+    pub iteration: u64,
+}
+
+pub fn run<G: Gen<Out = u64>, P: Fn(u64) -> bool>(_ g: G, _ prop: P, seed: u64, runs: u64) -> Outcome uses (G::E, P::E) {
+    var rng = Rng::new(seed)
+    var i: u64 = 0
+    while i < runs {
+        let x = g.gen(mut rng)
+        if !prop(x) { return Outcome { failed: true, input: x, iteration: i } }
+        i = i + 1
+    }
+    Outcome { failed: false, input: 0, iteration: runs }
+}
+
+// Integer shrinker: binary search toward 0 while the property still fails.
+pub fn shrink_u64<P: Fn(u64) -> bool>(_ prop: P, failing: u64) -> u64 uses P::E {
+    var best = failing
+    var lo: u64 = 0
+    while lo < best {
+        let mid = lo + (best - lo) / 2
+        if !prop(mid) { best = mid } else { lo = mid + 1 }
+    }
+    best
+}
+
+#[test]
+fn prng_is_deterministic() {
+    var a = Rng::new(42)
+    var b = Rng::new(42)
+    var i: u64 = 0
+    while i < 100 {
+        assert!(a.next_u64() == b.next_u64())
+        i = i + 1
+    }
+}
+
+#[test]
+fn finds_and_shrinks_planted_bug() {
+    let prop = |x: u64| buggy_sat_add(x, 1) >= x
+    let g = Biased { inner: U64Range { lo: 0, hi: 0xFFFFFFFFFFFFFFFF } }
+    let out = run(g, prop, seed: 7, runs: 10000)
+    assert!(out.failed)
+    let min = shrink_u64(prop, failing: out.input)
+    // smallest failing input is 0xFFFFFFFFFFFFFF01 (property not monotone, so check "still fails")
+    assert!(!prop(min))
+}
+
+#[test]
+fn map_combinator() {
+    let g = Map { inner: U64Range { lo: 0, hi: 100 }, f: |x: u64| x * 2 }
+    var rng = Rng::new(1)
+    var i: u64 = 0
+    while i < 50 {
+        let v = g.gen(mut rng)
+        assert!(v % 2 == 0 && v <= 200)
+        i = i + 1
+    }
+}
+
+#[test]
+fn intentionally_fails_to_see_output() {
+    let prop = |x: u64| buggy_sat_add(x, 1) >= x
+    let g = Biased { inner: U64Range { lo: 0, hi: 0xFFFFFFFFFFFFFFFF } }
+    let out = run(g, prop, seed: 7, runs: 10000)
+    assert!(!out.failed, "property failed")
+}

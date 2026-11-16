@@ -1,0 +1,110 @@
+// Spike probe 3: differential digests. Each test runs N generated inputs through a
+// function, folds results into a digest, and reverts with it so both backends'
+// outputs can be compared byte-for-byte.
+use std::evm::revert_error
+
+#[error]
+struct Digest {
+    which: u64,
+    acc: u256,
+    count: u64,
+}
+
+struct Rng { state: u64 }
+
+impl Rng {
+    fn next(mut self) -> u64 {
+        var x = self.state
+        x = x ^ (x >> 12)
+        x = x ^ (x << 25)
+        x = x ^ (x >> 27)
+        self.state = x
+        x.wrapping_mul(0x2545F4914F6CDD1D)
+    }
+    fn next_u256(mut self) -> u256 {
+        let a: u256 = self.next() as u256
+        let b: u256 = self.next() as u256
+        let c: u256 = self.next() as u256
+        let d: u256 = self.next() as u256
+        (a << 192) | (b << 128) | (c << 64) | d
+    }
+}
+
+fn fold(_ acc: u256, _ v: u256) -> u256 {
+    (acc ^ v).wrapping_mul(0x100000001B3) + 0x9E3779B97F4A7C15
+}
+
+fn report(which: u64, acc: u256, count: u64) -> ! {
+    revert_error(Digest { which, acc, count })
+}
+
+// --- functions under differential test ---
+fn mul_div(_ a: u256, _ b: u256, _ d: u256) -> u256 {
+    if d == 0 { return 0 }
+    a.wrapping_mul(b) / d
+}
+
+fn signed_mix(_ a: i128, _ b: i128) -> i128 {
+    if b == 0 { return 0 }
+    (a.wrapping_sub(b)) % b + (a >> 3)
+}
+
+fn shifts(_ a: u256, _ s: u64) -> u256 {
+    let k: u256 = (s % 300) as u256
+    (a << k) ^ (a >> k)
+}
+
+const N: u64 = 5000
+
+#[test]
+fn diff_mul_div() {
+    var r = Rng { state: 0xDEADBEEF }
+    var acc: u256 = 0
+    var i: u64 = 0
+    while i < N {
+        acc = fold(acc, mul_div(r.next_u256(), r.next_u256(), r.next_u256() >> ((r.next() % 256) as u256)))
+        i += 1
+    }
+    report(which: 1, acc, count: N)
+}
+
+#[test]
+fn diff_signed_mix() {
+    var r = Rng { state: 0xC0FFEE }
+    var acc: u256 = 0
+    var i: u64 = 0
+    while i < N {
+        let hi: u128 = r.next() as u128
+        let lo: u128 = r.next() as u128
+        let ua: u128 = (hi << 64) | lo
+        let a: i128 = ua.downcast_truncate()
+        let ub: u128 = r.next() as u128
+        let b0: i128 = ub.downcast_truncate()
+        let b: i128 = b0 - 9223372036854775808
+        let v = signed_mix(a, b)
+        let as_u: u128 = v.downcast_truncate()
+        acc = fold(acc, as_u as u256)
+        i += 1
+    }
+    report(which: 2, acc, count: N)
+}
+
+#[test]
+fn diff_shifts() {
+    var r = Rng { state: 12345 }
+    var acc: u256 = 0
+    var i: u64 = 0
+    while i < N {
+        acc = fold(acc, shifts(r.next_u256(), r.next()))
+        i += 1
+    }
+    report(which: 3, acc, count: N)
+}
+
+#[test]
+fn diff_checked_overflow_panics() {
+    // native vs evm: does an overflow abort the same way?
+    let a: u64 = 0xFFFFFFFFFFFFFFFF
+    let b: u64 = a + 1
+    report(which: 4, acc: b as u256, count: 1)
+}

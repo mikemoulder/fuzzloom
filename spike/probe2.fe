@@ -1,0 +1,26 @@
+use std::evm::{Log, Evm, encode_error}
+
+#[event]
+struct PropertyFailed {
+    seed: u64,
+    iteration: u64,
+    input: u64,
+    shrunk: u64,
+}
+
+#[error]
+struct Counterexample {
+    seed: u64,
+    input: u64,
+}
+
+#[test]
+fn emits_failure_event() uses (log: mut Log) {
+    log.emit(PropertyFailed { seed: 7, iteration: 42, input: 0xFFFFFFFFFFFFFFF3, shrunk: 0xFFFFFFFFFFFFFF01 })
+}
+
+#[test]
+fn reverts_with_custom_error() uses (evm: mut Evm) {
+    let e = encode_error(Counterexample { seed: 7, input: 12345 })
+    evm.revert(data: e.span())
+}
