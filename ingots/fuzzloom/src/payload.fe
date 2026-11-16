@@ -17,32 +17,18 @@ pub struct Counterexample {
 
 /// The property held for every generated input.
 #[error]
-pub struct Passed {
-    pub seed: u64,
-    pub runs: u64,
-}
+pub struct Passed { pub seed: u64, pub runs: u64 }
 
 /// Result of replaying one saved input against a property.
 #[error]
-pub struct Replayed {
-    pub input: u256,
-    pub failed: bool,
-}
+pub struct Replayed { pub input: u256, pub failed: bool }
 
 /// The input word a campaign generates at `iteration` (used to recover the
 /// input when a property aborts instead of returning false).
 #[error]
-pub struct Generated {
-    pub seed: u64,
-    pub iteration: u64,
-    pub input: u256,
-}
+pub struct Generated { pub seed: u64, pub iteration: u64, pub input: u256 }
 
 /// A fold of a function's outputs over a deterministic input stream, for
 /// comparing backends.
 #[error]
-pub struct Digest {
-    pub seed: u64,
-    pub runs: u64,
-    pub acc: u256,
-}
+pub struct Digest { pub seed: u64, pub runs: u64, pub acc: u256 }

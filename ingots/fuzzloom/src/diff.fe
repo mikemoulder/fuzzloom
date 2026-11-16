@@ -22,7 +22,9 @@ pub fn fold(_ acc: u256, _ out: u256) -> u256 {
 }
 
 /// Folds `f` over the first `runs` inputs of the default campaign for `T`.
-pub fn digest_of<T: Word, U: Word, F: Fn(T) -> U>(_ f: F, seed: u64, runs: u64) -> u256 uses F::E {
+pub fn digest_of<T: Word, U: Word, F: Fn(T) -> U>(_ f: F, seed: u64, runs: u64) -> u256
+uses F::E
+{
     let g = Biased::of(Range::full<T>())
     var rng = Rng::new(seed)
     var acc: u256 = FOLD_OFFSET
@@ -36,7 +38,9 @@ pub fn digest_of<T: Word, U: Word, F: Fn(T) -> U>(_ f: F, seed: u64, runs: u64) 
 }
 
 /// Harness entry point: end the test with the digest of `f`.
-pub fn digest<T: Word, U: Word, F: Fn(T) -> U>(_ f: F, seed: u64, runs: u64) -> ! uses F::E {
+pub fn digest<T: Word, U: Word, F: Fn(T) -> U>(_ f: F, seed: u64, runs: u64) -> !
+uses F::E
+{
     let acc = digest_of(f, seed, runs)
     revert_error(Digest { seed, runs, acc })
 }
@@ -51,7 +55,11 @@ fn digest_is_deterministic() {
 #[test]
 fn digest_detects_a_single_differing_output() {
     let a = digest_of(|x: u64| x, seed: 4, runs: 3000)
-    let b = digest_of(|x: u64| if x == 0xFFFFFFFFFFFFFFFF { 0 } else { x }, seed: 4, runs: 3000)
+    let b = digest_of(
+        |x: u64| if x == 0xFFFFFFFFFFFFFFFF { 0 } else { x },
+        seed: 4,
+        runs: 3000,
+    )
     assert!(a != b)
 }
 
@@ -68,7 +76,9 @@ fn zero_runs_is_the_offset() {
     assert!(digest_of(|x: u8| x, seed: 1, runs: 0) == FOLD_OFFSET)
 }
 
-fn kav_target(_ x: u64) -> u64 { x.wrapping_mul(0x9E3779B97F4A7C15) ^ (x >> 7) }
+fn kav_target(_ x: u64) -> u64 {
+    x.wrapping_mul(0x9E3779B97F4A7C15) ^ (x >> 7)
+}
 
 #[test]
 fn known_answer_digest_matches_on_every_backend() {
@@ -76,5 +86,7 @@ fn known_answer_digest_matches_on_every_backend() {
     // checks itself against this one constant, so a backend that computes
     // the fold, the generator or the PRNG differently fails here.
     let d = digest_of(kav_target, seed: 12345, runs: 10000)
-    assert!(d == 0x6e8bfbbd6b85134f314e6442618a6073d4a564791d0fbc3d568948fe62d91015)
+    assert!(
+        d == 0x6e8bfbbd6b85134f314e6442618a6073d4a564791d0fbc3d568948fe62d91015,
+    )
 }

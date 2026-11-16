@@ -29,7 +29,16 @@ impl Copy for Report {}
 
 /// Runs `prop` over `runs` inputs drawn from `g`, shrinking toward `floor`
 /// on the first failure.
-pub fn find<T: Word, G: Gen, P: Fn(T) -> bool>(_ g: G, _ prop: P, seed: u64, runs: u64, floor: u256, budget: u64) -> Report uses (G::E, P::E) {
+pub fn find<T: Word, G: Gen, P: Fn(T) -> bool>(
+    _ g: G,
+    _ prop: P,
+    seed: u64,
+    runs: u64,
+    floor: u256,
+    budget: u64,
+) -> Report
+uses (G::E, P::E)
+{
     var rng = Rng::new(seed)
     var i: u64 = 0
     while i < runs {
@@ -40,42 +49,81 @@ pub fn find<T: Word, G: Gen, P: Fn(T) -> bool>(_ g: G, _ prop: P, seed: u64, run
         }
         i += 1
     }
-    Report { failed: false, seed, runs, iteration: runs, original: 0, shrunk: Shrunk { value: 0, attempts: 0, complete: true } }
+    Report {
+        failed: false,
+        seed,
+        runs,
+        iteration: runs,
+        original: 0,
+        shrunk: Shrunk { value: 0, attempts: 0, complete: true },
+    }
 }
 
 /// The default campaign: boundary-biased inputs over every value of `T`.
-pub fn find_all<T: Word, P: Fn(T) -> bool>(_ prop: P, seed: u64, runs: u64) -> Report uses P::E {
-    find(Biased::of(Range::full<T>()), prop, seed, runs, floor: 0, budget: SHRINK_BUDGET)
+pub fn find_all<T: Word, P: Fn(T) -> bool>(_ prop: P, seed: u64, runs: u64) -> Report
+uses P::E
+{
+    find(
+        Biased::of(Range::full<T>()),
+        prop,
+        seed,
+        runs,
+        floor: 0,
+        budget: SHRINK_BUDGET,
+    )
 }
 
 /// Ends the test with the payload for `r`.
 pub fn conclude(_ r: Report) -> ! {
     if r.failed {
-        revert_error(Counterexample {
-            seed: r.seed,
-            iteration: r.iteration,
-            original: r.original,
-            shrunk: r.shrunk.value,
-            shrink_attempts: r.shrunk.attempts,
-            shrink_complete: r.shrunk.complete,
-        })
+        revert_error(
+            Counterexample {
+                seed: r.seed,
+                iteration: r.iteration,
+                original: r.original,
+                shrunk: r.shrunk.value,
+                shrink_attempts: r.shrunk.attempts,
+                shrink_complete: r.shrunk.complete,
+            },
+        )
     }
     revert_error(Passed { seed: r.seed, runs: r.runs })
 }
 
 /// Harness entry point: default campaign over every value of `T`.
-pub fn check<T: Word, P: Fn(T) -> bool>(_ prop: P, seed: u64, runs: u64) -> ! uses P::E {
+pub fn check<T: Word, P: Fn(T) -> bool>(_ prop: P, seed: u64, runs: u64) -> !
+uses P::E
+{
     conclude(find_all(prop, seed, runs))
 }
 
 /// Harness entry point: campaign over `lo..=hi`, shrinking toward `lo`.
-pub fn check_range<T: Word, P: Fn(T) -> bool>(_ prop: P, lo: u256, hi: u256, seed: u64, runs: u64) -> ! uses P::E {
+pub fn check_range<T: Word, P: Fn(T) -> bool>(
+    _ prop: P,
+    lo: u256,
+    hi: u256,
+    seed: u64,
+    runs: u64,
+) -> !
+uses P::E
+{
     let range = Range::between(lo, hi)
-    conclude(find(Biased::of(range), prop, seed, runs, floor: range.lo, budget: SHRINK_BUDGET))
+    conclude(
+        find(
+            Biased::of(range),
+            prop,
+            seed,
+            runs,
+            floor: range.lo,
+            budget: SHRINK_BUDGET,
+        ),
+    )
 }
 
 /// Harness entry point: evaluate `prop` on one saved input.
-pub fn replay<T: Word, P: Fn(T) -> bool>(_ prop: P, input: u256) -> ! uses P::E {
+pub fn replay<T: Word, P: Fn(T) -> bool>(_ prop: P, input: u256) -> !
+uses P::E
+{
     let failed = !prop(T::from_word(input))
     revert_error(Replayed { input, failed })
 }
@@ -95,8 +143,12 @@ pub fn input_at<T: Word>(seed: u64, iteration: u64) -> ! {
 }
 
 fn buggy_sat_add(_ a: u64, _ b: u64) -> u64 {
-    if a > 0xFFFFFFFFFFFFFF00 { return 0 }
-    if b > 0xFFFFFFFFFFFFFFFF - a { return 0xFFFFFFFFFFFFFFFF }
+    if a > 0xFFFFFFFFFFFFFF00 {
+        return 0
+    }
+    if b > 0xFFFFFFFFFFFFFFFF - a {
+        return 0xFFFFFFFFFFFFFFFF
+    }
     a + b
 }
 
@@ -110,7 +162,11 @@ fn finds_and_shrinks_planted_boundary_bug() {
 
 #[test]
 fn passes_a_true_property() {
-    let r = find_all(|x: u32| (x as u256) + 1 > (x as u256), seed: 1, runs: 2000)
+    let r = find_all(
+        |x: u32| (x as u256) + 1 > (x as u256),
+        seed: 1,
+        runs: 2000,
+    )
     assert!(!r.failed)
     assert!(r.runs == 2000)
 }
@@ -120,7 +176,9 @@ fn same_seed_same_report() {
     let a = find_all(|x: u64| x % 1000 != 999, seed: 3, runs: 50000)
     let b = find_all(|x: u64| x % 1000 != 999, seed: 3, runs: 50000)
     assert!(a.failed && b.failed)
-    assert!(a.iteration == b.iteration && a.original == b.original && a.shrunk.value == b.shrunk.value)
+    assert!(
+        a.iteration == b.iteration && a.original == b.original && a.shrunk.value == b.shrunk.value,
+    )
 }
 
 #[test]
@@ -132,6 +190,13 @@ fn bool_properties_work() {
 #[test]
 fn range_campaign_shrinks_toward_its_floor() {
     let range = Range::between(lo: 500, hi: 100000)
-    let r = find(Biased::of(range), |x: u64| x < 700, seed: 2, runs: 1000, floor: 500, budget: 2000)
+    let r = find(
+        Biased::of(range),
+        |x: u64| x < 700,
+        seed: 2,
+        runs: 1000,
+        floor: 500,
+        budget: 2000,
+    )
     assert!(r.failed && r.shrunk.value == 700)
 }

@@ -30,7 +30,9 @@ impl Copy for Shrunk {}
 
 /// Shrinks the failing word `failing` toward `lo`. A candidate word `c`
 /// still fails when `holds(T::from_word(c))` is false.
-pub fn shrink<T: Word, P: Fn(T) -> bool>(_ holds: P, failing: u256, lo: u256, budget: u64) -> Shrunk uses P::E {
+pub fn shrink<T: Word, P: Fn(T) -> bool>(_ holds: P, failing: u256, lo: u256, budget: u64) -> Shrunk
+uses P::E
+{
     var best = failing
     var attempts: u64 = 0
 
@@ -72,14 +74,24 @@ pub fn shrink<T: Word, P: Fn(T) -> bool>(_ holds: P, failing: u256, lo: u256, bu
 
 #[test]
 fn shrinks_threshold_failure_to_the_threshold() {
-    let r = shrink(|w: u256| !(w >= 1000), failing: 98765, lo: 0, budget: 10000)
+    let r = shrink(
+        |w: u256| !(w >= 1000),
+        failing: 98765,
+        lo: 0,
+        budget: 10000,
+    )
     assert!(r.value == 1000)
     assert!(r.complete)
 }
 
 #[test]
 fn shrinks_to_floor_when_everything_fails() {
-    let r = shrink(|w: u256| !(true), failing: u256::max(), lo: 5, budget: 10000)
+    let r = shrink(
+        |w: u256| !(true),
+        failing: u256::max(),
+        lo: 5,
+        budget: 10000,
+    )
     assert!(r.value == 5)
 }
 
@@ -87,19 +99,34 @@ fn shrinks_to_floor_when_everything_fails() {
 fn handles_non_monotone_failures() {
     // Fails only on multiples of 7 above 100: the answer is 105, which a
     // plain binary search over a monotone predicate can miss.
-    let r = shrink(|w: u256| !(w > 100 && w % 7 == 0), failing: 7000, lo: 0, budget: 10000)
+    let r = shrink(
+        |w: u256| !(w > 100 && w % 7 == 0),
+        failing: 7000,
+        lo: 0,
+        budget: 10000,
+    )
     assert!(r.value == 105)
 }
 
 #[test]
 fn shrinks_top_of_u64_window() {
-    let r = shrink(|w: u256| !(w > 0xFFFFFFFFFFFFFF00 && w <= 0xFFFFFFFFFFFFFFFF), failing: 0xFFFFFFFFFFFFFFF3, lo: 0, budget: 10000)
+    let r = shrink(
+        |w: u256| !(w > 0xFFFFFFFFFFFFFF00 && w <= 0xFFFFFFFFFFFFFFFF),
+        failing: 0xFFFFFFFFFFFFFFF3,
+        lo: 0,
+        budget: 10000,
+    )
     assert!(r.value == 0xFFFFFFFFFFFFFF01)
 }
 
 #[test]
 fn respects_budget() {
-    let r = shrink(|w: u256| !(w >= 1000000), failing: u256::max(), lo: 0, budget: 3)
+    let r = shrink(
+        |w: u256| !(w >= 1000000),
+        failing: u256::max(),
+        lo: 0,
+        budget: 3,
+    )
     assert!(!r.complete)
     assert!(r.attempts == 3)
     assert!(r.value == u256::max())
@@ -107,12 +134,22 @@ fn respects_budget() {
 
 #[test]
 fn sweep_finds_small_exact_answer() {
-    let r = shrink(|w: u256| !(w == 0 || w >= 37), failing: 900000, lo: 1, budget: 10000)
+    let r = shrink(
+        |w: u256| !(w == 0 || w >= 37),
+        failing: 900000,
+        lo: 1,
+        budget: 10000,
+    )
     assert!(r.value == 37)
 }
 
 #[test]
 fn never_returns_a_passing_value() {
-    let r = shrink(|w: u256| !(w == 4242), failing: 4242, lo: 0, budget: 10000)
+    let r = shrink(
+        |w: u256| !(w == 4242),
+        failing: 4242,
+        lo: 0,
+        budget: 10000,
+    )
     assert!(r.value == 4242)
 }

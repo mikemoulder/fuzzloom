@@ -5,9 +5,7 @@
 //! the same input stream on every machine and backend.
 
 /// A seeded xorshift64* generator. The same seed always yields the same stream.
-pub struct Rng {
-    pub state: u64,
-}
+pub struct Rng { pub state: u64 }
 
 impl Rng {
     /// Creates a generator. Seed 0 is remapped, because xorshift has an
@@ -39,7 +37,9 @@ impl Rng {
     /// Uniform-ish value in `0..=max` (modulo bias is accepted for test generation).
     pub fn below_or_eq(mut self, _ max: u256) -> u256 {
         let r = self.next_u256()
-        if max == u256::max() { return r }
+        if max == u256::max() {
+            return r
+        }
         r % (max + 1)
     }
 }

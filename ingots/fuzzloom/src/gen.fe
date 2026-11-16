@@ -11,10 +11,7 @@ pub trait Gen {
 }
 
 /// Uniform over `lo..=hi`.
-pub struct Range {
-    pub lo: u256,
-    pub hi: u256,
-}
+pub struct Range { pub lo: u256, pub hi: u256 }
 
 impl Range {
     /// Every value of type `T`.
@@ -24,7 +21,11 @@ impl Range {
 
     /// `lo..=hi`, swapped if given in the wrong order.
     pub fn between(lo: u256, hi: u256) -> Self {
-        if lo <= hi { Range { lo, hi } } else { Range { lo: hi, hi: lo } }
+        if lo <= hi {
+            Range { lo, hi }
+        } else {
+            Range { lo: hi, hi: lo }
+        }
     }
 }
 
@@ -38,20 +39,17 @@ impl Gen for Range {
 }
 
 /// Always yields the same word. Useful for pinning one input of a pair.
-pub struct Just {
-    pub value: u256,
-}
+pub struct Just { pub value: u256 }
 
 impl Gen for Just {
     uses E = ()
-    fn gen(self, _ rng: mut Rng) -> u256 { self.value }
+    fn gen(self, _ rng: mut Rng) -> u256 {
+        self.value
+    }
 }
 
 /// Applies `f` to every word produced by `inner`.
-pub struct Map<G, F> {
-    pub inner: G,
-    pub f: F,
-}
+pub struct Map<G, F> { pub inner: G, pub f: F }
 
 impl<G: Gen, F: Fn(u256) -> u256> Gen for Map<G, F> {
     uses E = (G::E, F::E)
@@ -96,7 +94,9 @@ fn range_full_u256_covers_high_bits() {
     var high = false
     var i: u64 = 0
     while i < 64 {
-        if g.gen(mut r) > u128::max_word() { high = true }
+        if g.gen(mut r) > u128::max_word() {
+            high = true
+        }
         i += 1
     }
     assert!(high)

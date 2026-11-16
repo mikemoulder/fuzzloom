@@ -14,45 +14,87 @@ pub trait Word {
 }
 
 impl Word for u8 {
-    fn max_word() -> u256 { 0xFF }
-    fn from_word(_ w: u256) -> u8 { w.downcast_truncate() }
-    fn to_word(self) -> u256 { self as u256 }
+    fn max_word() -> u256 {
+        0xFF
+    }
+    fn from_word(_ w: u256) -> u8 {
+        w.downcast_truncate()
+    }
+    fn to_word(self) -> u256 {
+        self as u256
+    }
 }
 
 impl Word for u16 {
-    fn max_word() -> u256 { 0xFFFF }
-    fn from_word(_ w: u256) -> u16 { w.downcast_truncate() }
-    fn to_word(self) -> u256 { self as u256 }
+    fn max_word() -> u256 {
+        0xFFFF
+    }
+    fn from_word(_ w: u256) -> u16 {
+        w.downcast_truncate()
+    }
+    fn to_word(self) -> u256 {
+        self as u256
+    }
 }
 
 impl Word for u32 {
-    fn max_word() -> u256 { 0xFFFFFFFF }
-    fn from_word(_ w: u256) -> u32 { w.downcast_truncate() }
-    fn to_word(self) -> u256 { self as u256 }
+    fn max_word() -> u256 {
+        0xFFFFFFFF
+    }
+    fn from_word(_ w: u256) -> u32 {
+        w.downcast_truncate()
+    }
+    fn to_word(self) -> u256 {
+        self as u256
+    }
 }
 
 impl Word for u64 {
-    fn max_word() -> u256 { 0xFFFFFFFFFFFFFFFF }
-    fn from_word(_ w: u256) -> u64 { w.downcast_truncate() }
-    fn to_word(self) -> u256 { self as u256 }
+    fn max_word() -> u256 {
+        0xFFFFFFFFFFFFFFFF
+    }
+    fn from_word(_ w: u256) -> u64 {
+        w.downcast_truncate()
+    }
+    fn to_word(self) -> u256 {
+        self as u256
+    }
 }
 
 impl Word for u128 {
-    fn max_word() -> u256 { 0xFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFF }
-    fn from_word(_ w: u256) -> u128 { w.downcast_truncate() }
-    fn to_word(self) -> u256 { self as u256 }
+    fn max_word() -> u256 {
+        0xFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFF
+    }
+    fn from_word(_ w: u256) -> u128 {
+        w.downcast_truncate()
+    }
+    fn to_word(self) -> u256 {
+        self as u256
+    }
 }
 
 impl Word for u256 {
-    fn max_word() -> u256 { u256::max() }
-    fn from_word(_ w: u256) -> u256 { w }
-    fn to_word(self) -> u256 { self }
+    fn max_word() -> u256 {
+        u256::max()
+    }
+    fn from_word(_ w: u256) -> u256 {
+        w
+    }
+    fn to_word(self) -> u256 {
+        self
+    }
 }
 
 impl Word for bool {
-    fn max_word() -> u256 { 1 }
-    fn from_word(_ w: u256) -> bool { w != 0 }
-    fn to_word(self) -> u256 { if self { 1 } else { 0 } }
+    fn max_word() -> u256 {
+        1
+    }
+    fn from_word(_ w: u256) -> bool {
+        w != 0
+    }
+    fn to_word(self) -> u256 {
+        if self { 1 } else { 0 }
+    }
 }
 
 #[test]

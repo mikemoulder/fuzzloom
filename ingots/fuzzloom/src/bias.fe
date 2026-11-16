@@ -22,25 +22,30 @@ pub fn edge(lo: u256, hi: u256, _ rng: mut Rng) -> u256 {
     let pick = rng.next_u64() % 8
     if pick == 0 { return lo }
     if pick == 1 { return hi }
-    if pick == 2 { return if span >= 1 { lo + 1 } else { lo } }
-    if pick == 3 { return if span >= 1 { hi - 1 } else { hi } }
-    if pick == 4 { return lo + span / 2 }
+    if pick == 2 {
+        return if span >= 1 { lo + 1 } else { lo }
+    }
+    if pick == 3 {
+        return if span >= 1 { hi - 1 } else { hi }
+    }
+    if pick == 4 {
+        return lo + span / 2
+    }
     // Power-of-two boundaries, offset from lo so they respect the range.
     let bits = bit_len(span)
     if bits == 0 { return lo }
     let k = rng.below_or_eq(bits - 1)
     let p: u256 = 1 << k
-    let offset = if pick == 5 { p - 1 } else if pick == 6 { p } else { p + 1 }
+    let offset = if pick == 5 {
+        p - 1
+    } else if pick == 6 { p } else { p + 1 }
     if offset > span { return hi }
     lo + offset
 }
 
 /// Wraps a `Range`, drawing an edge with probability `1 / every` and
 /// delegating to the uniform range otherwise.
-pub struct Biased {
-    pub range: Range,
-    pub every: u64,
-}
+pub struct Biased { pub range: Range, pub every: u64 }
 
 impl Biased {
     /// The default bias: one draw in four is an edge.
@@ -88,9 +93,13 @@ fn edges_hit_full_width_extremes() {
     var i: u64 = 0
     while i < 2000 {
         let e = edge(lo: 0, hi: u256::max(), mut r)
-        if e == u256::max() { saw_max = true }
+        if e == u256::max() {
+            saw_max = true
+        }
         if e == 0 { saw_zero = true }
-        if e == 0x10000000000000000 { saw_pow = true }
+        if e == 0x10000000000000000 {
+            saw_pow = true
+        }
         i += 1
     }
     assert!(saw_max && saw_zero && saw_pow)
@@ -115,7 +124,9 @@ fn biased_finds_top_of_u64_far_more_than_uniform() {
     var hits: u64 = 0
     var i: u64 = 0
     while i < 2000 {
-        if g.gen(mut r) > 0xFFFFFFFFFFFFFF00 { hits += 1 }
+        if g.gen(mut r) > 0xFFFFFFFFFFFFFF00 {
+            hits += 1
+        }
         i += 1
     }
     assert!(hits > 20)
