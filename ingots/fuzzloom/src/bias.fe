@@ -1,0 +1,122 @@
+//! Boundary-biased generation: defects cluster at edges, so a share of every
+//! campaign is spent on them instead of on uniform draws.
+
+use ingot::rng::Rng
+use ingot::gen::{Gen, Range}
+
+/// Number of significant bits in `x` (0 for 0).
+pub fn bit_len(_ x: u256) -> u256 {
+    var n: u256 = 0
+    var v = x
+    while v != 0 {
+        v = v >> 1
+        n += 1
+    }
+    n
+}
+
+/// Picks an edge of `lo..=hi`: an endpoint, a neighbour of one, the midpoint,
+/// or a power-of-two boundary (2^k - 1, 2^k, 2^k + 1) that lies in range.
+pub fn edge(lo: u256, hi: u256, _ rng: mut Rng) -> u256 {
+    let span = hi - lo
+    let pick = rng.next_u64() % 8
+    if pick == 0 { return lo }
+    if pick == 1 { return hi }
+    if pick == 2 { return if span >= 1 { lo + 1 } else { lo } }
+    if pick == 3 { return if span >= 1 { hi - 1 } else { hi } }
+    if pick == 4 { return lo + span / 2 }
+    // Power-of-two boundaries, offset from lo so they respect the range.
+    let bits = bit_len(span)
+    if bits == 0 { return lo }
+    let k = rng.below_or_eq(bits - 1)
+    let p: u256 = 1 << k
+    let offset = if pick == 5 { p - 1 } else if pick == 6 { p } else { p + 1 }
+    if offset > span { return hi }
+    lo + offset
+}
+
+/// Wraps a `Range`, drawing an edge with probability `1 / every` and
+/// delegating to the uniform range otherwise.
+pub struct Biased {
+    pub range: Range,
+    pub every: u64,
+}
+
+impl Biased {
+    /// The default bias: one draw in four is an edge.
+    pub fn of(_ range: Range) -> Self {
+        Biased { range, every: 4 }
+    }
+}
+
+impl Gen for Biased {
+    uses E = ()
+    fn gen(self, _ rng: mut Rng) -> u256 {
+        if self.every != 0 && rng.next_u64() % self.every == 0 {
+            return edge(lo: self.range.lo, hi: self.range.hi, mut rng)
+        }
+        self.range.gen(mut rng)
+    }
+}
+
+#[test]
+fn bit_len_matches_definition() {
+    assert!(bit_len(0) == 0)
+    assert!(bit_len(1) == 1)
+    assert!(bit_len(255) == 8)
+    assert!(bit_len(256) == 9)
+    assert!(bit_len(u256::max()) == 256)
+}
+
+#[test]
+fn edges_stay_in_range() {
+    var r = Rng::new(17)
+    var i: u64 = 0
+    while i < 3000 {
+        let e = edge(lo: 1000, hi: 1500, mut r)
+        assert!(e >= 1000 && e <= 1500)
+        i += 1
+    }
+}
+
+#[test]
+fn edges_hit_full_width_extremes() {
+    var r = Rng::new(23)
+    var saw_max = false
+    var saw_zero = false
+    var saw_pow = false
+    var i: u64 = 0
+    while i < 2000 {
+        let e = edge(lo: 0, hi: u256::max(), mut r)
+        if e == u256::max() { saw_max = true }
+        if e == 0 { saw_zero = true }
+        if e == 0x10000000000000000 { saw_pow = true }
+        i += 1
+    }
+    assert!(saw_max && saw_zero && saw_pow)
+}
+
+#[test]
+fn single_value_range_is_safe() {
+    var r = Rng::new(2)
+    var i: u64 = 0
+    while i < 200 {
+        assert!(edge(lo: 7, hi: 7, mut r) == 7)
+        i += 1
+    }
+}
+
+#[test]
+fn biased_finds_top_of_u64_far_more_than_uniform() {
+    // The planted-bug window [2^64 - 255, 2^64 - 1] is ~1e-17 of the space,
+    // so uniform sampling essentially never hits it; bias does.
+    let g = Biased::of(Range::full<u64>())
+    var r = Rng::new(7)
+    var hits: u64 = 0
+    var i: u64 = 0
+    while i < 2000 {
+        if g.gen(mut r) > 0xFFFFFFFFFFFFFF00 { hits += 1 }
+        i += 1
+    }
+    assert!(hits > 20)
+}
