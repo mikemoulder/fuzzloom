@@ -1,0 +1,7 @@
+// A property that aborts instead of returning false, and only rarely:
+// the divisor is zero exactly when price % 1000 == 777, so the runtime
+// panics with division by zero (0x12) deep into a campaign.
+pub fn prop_rate_bounded(_ price: u64, _ qty: u64) -> bool {
+    let rate = qty / ((price % 1000) ^ 777)
+    rate <= qty
+}
