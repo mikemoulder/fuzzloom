@@ -1,0 +1,117 @@
+//! The campaign input stream.
+//!
+//! Every campaign, `input_at` and digest draws inputs through `draw`, so the
+//! input at iteration i is a pure function of (bounds, arity, seed, i). That
+//! is what lets the CLI recover the input of a property that aborts instead
+//! of returning false: it finds the iteration by bisecting on `runs`, then
+//! asks `generated_at` for the input.
+//!
+//! Each argument is drawn independently with boundary bias. For two or more
+//! arguments, one draw in eight then correlates argument 1 with argument 0:
+//! equal, one above, or one below (clamped to argument 1's bounds). Whole bug
+//! classes live on that diagonal (transfer to self, amount == balance,
+//! off-by-one between two inputs) and independent 256-bit draws essentially
+//! never land on it.
+
+use ingot::rng::Rng
+use ingot::gen::{Gen, Range}
+use ingot::bias::Biased
+use ingot::input::{Bounds, Input}
+
+/// One correlated draw in this many, for arity >= 2.
+pub const CORRELATE_EVERY: u64 = 8
+
+/// Draws the next input.
+pub fn draw(_ b: Bounds, arity: u64, _ rng: mut Rng) -> Input {
+    var x = Input::zero()
+    var i: u64 = 0
+    while i < arity {
+        let g = Biased::of(Range::between(lo: b.lo.get(i), hi: b.hi.get(i)))
+        x = x.with(i, g.gen(mut rng))
+        i += 1
+    }
+    if arity >= 2 && rng.next_u64() % CORRELATE_EVERY == 0 {
+        let a = x.w0
+        let lo1 = b.lo.w1
+        let hi1 = b.hi.w1
+        let pick = rng.next_u64() % 3
+        var c = a
+        if pick == 1 && a < u256::max() {
+            c = a + 1
+        }
+        if pick == 2 && a > 0 {
+            c = a - 1
+        }
+        if c >= lo1 && c <= hi1 {
+            x = x.with(1, c)
+        }
+    }
+    x
+}
+
+/// The input a campaign with these parameters draws at `iteration`.
+pub fn generated_at(_ b: Bounds, arity: u64, seed: u64, iteration: u64) -> Input {
+    var rng = Rng::new(seed)
+    var x = Input::zero()
+    var i: u64 = 0
+    while i <= iteration {
+        x = draw(b, arity, mut rng)
+        i += 1
+    }
+    x
+}
+
+#[test]
+fn draws_respect_bounds_per_argument() {
+    let b = Bounds::full(255, 0xFFFF, 1).restrict(1, lo: 100, hi: 200)
+    var rng = Rng::new(4)
+    var i: u64 = 0
+    while i < 3000 {
+        let x = draw(b, arity: 3, mut rng)
+        assert!(x.w0 <= 255 && x.w1 >= 100 && x.w1 <= 200 && x.w2 <= 1)
+        i += 1
+    }
+}
+
+#[test]
+fn unused_arguments_stay_zero() {
+    let b = Bounds::full(u256::max(), u256::max(), u256::max())
+    var rng = Rng::new(8)
+    var i: u64 = 0
+    while i < 500 {
+        let x = draw(b, arity: 1, mut rng)
+        assert!(x.w1 == 0 && x.w2 == 0)
+        i += 1
+    }
+}
+
+#[test]
+fn correlation_hits_the_diagonal_of_wide_arguments() {
+    let b = Bounds::full(u256::max(), u256::max(), 0)
+    var rng = Rng::new(15)
+    var equal: u64 = 0
+    var adjacent: u64 = 0
+    var i: u64 = 0
+    while i < 4000 {
+        let x = draw(b, arity: 2, mut rng)
+        if x.w0 == x.w1 { equal += 1 }
+        if x.w0 != u256::max() && x.w1 == x.w0 + 1 {
+            adjacent += 1
+        }
+        i += 1
+    }
+    assert!(equal > 50 && adjacent > 50)
+}
+
+#[test]
+fn generated_at_replays_the_stream() {
+    let b = Bounds::full(u256::max(), 0xFF, 0)
+    var rng = Rng::new(99)
+    var x = Input::zero()
+    var i: u64 = 0
+    while i < 37 {
+        x = draw(b, arity: 2, mut rng)
+        i += 1
+    }
+    assert!(generated_at(b, arity: 2, seed: 99, iteration: 36).same(x))
+}
