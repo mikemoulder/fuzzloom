@@ -64,3 +64,14 @@ pub struct Generated {
 /// comparing backends.
 #[error]
 pub struct Digest { pub seed: u64, pub runs: u64, pub arity: u64, pub acc: u256 }
+
+/// One differential target's output for one input, so the CLI can show
+/// exactly how two backends disagree on the first diverging input.
+#[error]
+pub struct Evaluated {
+    pub arity: u64,
+    pub input0: u256,
+    pub input1: u256,
+    pub input2: u256,
+    pub output: u256,
+}

@@ -14,8 +14,8 @@
 use ingot::rng::Rng
 use ingot::word::Word
 use ingot::input::{Bounds, Input}
-use ingot::draw::draw
-use ingot::payload::Digest
+use ingot::draw::{draw, generated_at}
+use ingot::payload::{Digest, Evaluated, Generated}
 use std::evm::revert_error
 
 const FOLD_PRIME: u256 = 0x100000001B3
@@ -136,6 +136,34 @@ pub fn digest<T: Target>(_ t: T, seed: u64, runs: u64) -> ! uses T::E {
     revert_error(Digest { seed, runs, arity: T::arity(), acc })
 }
 
+/// Harness entry point: the input the digest of `t` draws at `iteration`.
+pub fn target_input_at<T: Target>(_ t: T, seed: u64, iteration: u64) -> ! {
+    let arity = T::arity()
+    let x = generated_at(T::full_bounds(), arity, seed, iteration)
+    revert_error(
+        Generated { seed, iteration, arity, input0: x.w0, input1: x.w1, input2: x.w2 },
+    )
+}
+
+/// Harness entry point: the output word of `t` for one input.
+pub fn evaluate<T: Target>(_ t: T, input: Input) -> ! uses T::E {
+    let output = t.eval(input)
+    revert_error(
+        Evaluated {
+            arity: T::arity(),
+            input0: input.w0,
+            input1: input.w1,
+            input2: input.w2,
+            output,
+        },
+    )
+}
+
+/// Pure counterpart of `target_input_at`, for tests.
+pub fn target_generated_at<T: Target>(_ t: T, seed: u64, iteration: u64) -> Input {
+    generated_at(T::full_bounds(), arity: T::arity(), seed, iteration)
+}
+
 #[test]
 fn digest_is_deterministic() {
     let a = digest_of(target1(|x: u64| x.wrapping_mul(3)), seed: 9, runs: 5000)
@@ -196,4 +224,18 @@ fn known_answer_digest_matches_on_every_backend() {
     assert!(
         d == 0x4fe7ee18bc39b26b26bc0d3110bc7fdc16b3e184337095313705a1c15fde6adf,
     )
+}
+
+#[test]
+fn digest_is_the_fold_of_the_generated_inputs() {
+    // target_generated_at reproduces exactly the inputs the digest folds,
+    // which is what lets the CLI evaluate the first diverging input.
+    let t = target2(|x: u32, y: u32| x ^ y)
+    var acc: u256 = FOLD_OFFSET
+    var i: u64 = 0
+    while i < 50 {
+        acc = fold(acc, t.eval(target_generated_at(t, seed: 3, iteration: i)))
+        i += 1
+    }
+    assert!(acc == digest_of(t, seed: 3, runs: 50))
 }
