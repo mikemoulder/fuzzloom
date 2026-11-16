@@ -29,16 +29,8 @@ Thumbs.db
 .idea/
 *.swp
 
-# Deliberately NOT ignored:
-#   *.md          docs/ is judge-facing evidence (architecture, integrations,
-#                 evaluation map). Ignoring markdown hides it.
-#   handoff.md    shared continuity. a teammate who slept needs to read it.
-#   memory.md     shared project knowledge.
-# See references/repo-hygiene.md before adding a markdown rule here.
-
-# Fe build output
-out/
-*.tar.gz
-
-# Fuzzloom scratch (corpus/failures/regressions ARE committed)
-.fuzzloom/tmp/
+# Markdown: only README.md and the .md files README.md links to are published.
+# Everything else (CLAUDE.md, handoff.md, memory.md, idea.md, notes) stays local.
+# When README.md links a new .md file, add a matching !path line below.
+*.md
+!README.md
