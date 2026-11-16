@@ -1,62 +1,153 @@
 //! Differential digests.
 //!
-//! A digest folds a function's outputs over the deterministic input stream
-//! of the default campaign. The same harness built for sonatina and for
-//! native must produce the same digest; if it does not, the CLI bisects on
-//! `runs` (digests are prefix-consistent: the first k folds are the same for
-//! any run count >= k) to find the first input whose outputs differ.
+//! A digest folds a function's outputs over the campaign input stream (the
+//! same `draw` stream properties use). The same harness built for sonatina
+//! and for native must produce the same digest. Digests are prefix-
+//! consistent: the first k folds are identical for any run count >= k, so on
+//! a mismatch the CLI bisects on `runs` to find the first input whose
+//! outputs differ, then recovers that input with `input_at`.
+//!
+//! The fold is order-sensitive FNV-style mixing over u256. It detects any
+//! single differing output word with overwhelming probability, but it is a
+//! checksum, not a cryptographic hash.
 
 use ingot::rng::Rng
 use ingot::word::Word
-use ingot::gen::{Gen, Range}
-use ingot::bias::Biased
+use ingot::input::{Bounds, Input}
+use ingot::draw::draw
 use ingot::payload::Digest
 use std::evm::revert_error
 
 const FOLD_PRIME: u256 = 0x100000001B3
 const FOLD_OFFSET: u256 = 0xCBF29CE484222325
 
+/// A function under differential test: one to three `Word` arguments, one
+/// `Word` result.
+pub trait Target {
+    uses E
+    fn arity() -> u64
+    fn full_bounds() -> Bounds
+    fn eval(self, _ x: Input) -> u256 uses E
+}
+
+pub struct Fn1<A, U, F> { pub f: F }
+
+pub struct Fn2<A, B, U, F> { pub f: F }
+
+pub struct Fn3<A, B, C, U, F> { pub f: F }
+
+impl<A: Word, U: Word, F: Fn(A) -> U> Target for Fn1<A, U, F> {
+    uses E = F::E
+
+    fn arity() -> u64 {
+        1
+    }
+
+    fn full_bounds() -> Bounds {
+        Bounds::full(A::max_word(), 0, 0)
+    }
+
+    fn eval(self, _ x: Input) -> u256 uses E {
+        (self.f)(A::from_word(x.w0)).to_word()
+    }
+}
+
+impl<A: Word, B: Word, U: Word, F: Fn(A, B) -> U> Target for Fn2<A, B, U, F> {
+    uses E = F::E
+
+    fn arity() -> u64 {
+        2
+    }
+
+    fn full_bounds() -> Bounds {
+        Bounds::full(A::max_word(), B::max_word(), 0)
+    }
+
+    fn eval(self, _ x: Input) -> u256 uses E {
+        (self.f)(A::from_word(x.w0), B::from_word(x.w1)).to_word()
+    }
+}
+
+impl<A: Word, B: Word, C: Word, U: Word, F: Fn(A, B, C) -> U> Target for Fn3<A, B, C, U, F> {
+    uses E = F::E
+
+    fn arity() -> u64 {
+        3
+    }
+
+    fn full_bounds() -> Bounds {
+        Bounds::full(A::max_word(), B::max_word(), C::max_word())
+    }
+
+    fn eval(self, _ x: Input) -> u256 uses E {
+        (self.f)(A::from_word(x.w0), B::from_word(x.w1), C::from_word(x.w2)).to_word()
+    }
+}
+
+pub fn target1<A: Word, U: Word, F: Fn(A) -> U>(_ f: own F) -> Fn1<A, U, F> {
+    Fn1 { f }
+}
+
+pub fn target2<A: Word, B: Word, U: Word, F: Fn(A, B) -> U>(_ f: own F) -> Fn2<A, B, U, F> {
+    Fn2 { f }
+}
+
+pub fn target3<A: Word, B: Word, C: Word, U: Word, F: Fn(A, B, C) -> U>(_ f: own F) -> Fn3<
+    A,
+    B,
+    C,
+    U,
+    F,
+> {
+    Fn3 { f }
+}
+
 /// Mixes one output word into the accumulator. Order-sensitive.
 pub fn fold(_ acc: u256, _ out: u256) -> u256 {
     (acc ^ out).wrapping_mul(FOLD_PRIME).wrapping_add(FOLD_OFFSET)
 }
 
-/// Folds `f` over the first `runs` inputs of the default campaign for `T`.
-pub fn digest_of<T: Word, U: Word, F: Fn(T) -> U>(_ f: F, seed: u64, runs: u64) -> u256
-uses F::E
+/// Folds `t` over the first `runs` inputs drawn within `bounds`.
+pub fn digest_within<T: Target>(_ t: T, bounds: Bounds, seed: u64, runs: u64) -> u256
+uses T::E
 {
-    let g = Biased::of(Range::full<T>())
+    let arity = T::arity()
     var rng = Rng::new(seed)
     var acc: u256 = FOLD_OFFSET
     var i: u64 = 0
     while i < runs {
-        let w = g.gen(mut rng)
-        acc = fold(acc, f(T::from_word(w)).to_word())
+        let x = draw(bounds, arity, mut rng)
+        acc = fold(acc, t.eval(x))
         i += 1
     }
     acc
 }
 
-/// Harness entry point: end the test with the digest of `f`.
-pub fn digest<T: Word, U: Word, F: Fn(T) -> U>(_ f: F, seed: u64, runs: u64) -> !
-uses F::E
+/// Folds `t` over the first `runs` inputs of the default campaign.
+pub fn digest_of<T: Target>(_ t: T, seed: u64, runs: u64) -> u256
+uses T::E
 {
-    let acc = digest_of(f, seed, runs)
-    revert_error(Digest { seed, runs, acc })
+    digest_within(t, bounds: T::full_bounds(), seed, runs)
+}
+
+/// Harness entry point: end the test with the digest of `t`.
+pub fn digest<T: Target>(_ t: T, seed: u64, runs: u64) -> ! uses T::E {
+    let acc = digest_of(t, seed, runs)
+    revert_error(Digest { seed, runs, arity: T::arity(), acc })
 }
 
 #[test]
 fn digest_is_deterministic() {
-    let a = digest_of(|x: u64| x.wrapping_mul(3), seed: 9, runs: 5000)
-    let b = digest_of(|x: u64| x.wrapping_mul(3), seed: 9, runs: 5000)
+    let a = digest_of(target1(|x: u64| x.wrapping_mul(3)), seed: 9, runs: 5000)
+    let b = digest_of(target1(|x: u64| x.wrapping_mul(3)), seed: 9, runs: 5000)
     assert!(a == b)
 }
 
 #[test]
 fn digest_detects_a_single_differing_output() {
-    let a = digest_of(|x: u64| x, seed: 4, runs: 3000)
+    let a = digest_of(target1(|x: u64| x), seed: 4, runs: 3000)
     let b = digest_of(
-        |x: u64| if x == 0xFFFFFFFFFFFFFFFF { 0 } else { x },
+        target1(|x: u64| if x == 0xFFFFFFFFFFFFFFFF { 0 } else { x }),
         seed: 4,
         runs: 3000,
     )
@@ -65,15 +156,29 @@ fn digest_detects_a_single_differing_output() {
 
 #[test]
 fn digest_depends_on_seed_and_runs() {
-    let a = digest_of(|x: u32| x, seed: 1, runs: 100)
-    let b = digest_of(|x: u32| x, seed: 2, runs: 100)
-    let c = digest_of(|x: u32| x, seed: 1, runs: 101)
+    let a = digest_of(target1(|x: u32| x), seed: 1, runs: 100)
+    let b = digest_of(target1(|x: u32| x), seed: 2, runs: 100)
+    let c = digest_of(target1(|x: u32| x), seed: 1, runs: 101)
     assert!(a != b && a != c)
 }
 
 #[test]
 fn zero_runs_is_the_offset() {
-    assert!(digest_of(|x: u8| x, seed: 1, runs: 0) == FOLD_OFFSET)
+    assert!(
+        digest_of(target1(|x: u8| x), seed: 1, runs: 0) == FOLD_OFFSET,
+    )
+}
+
+#[test]
+fn multi_argument_targets_digest() {
+    let a = digest_of(target2(|x: u64, y: u64| x ^ y), seed: 3, runs: 2000)
+    let b = digest_of(target2(|x: u64, y: u64| x | y), seed: 3, runs: 2000)
+    let c = digest_of(
+        target3(|x: i32, y: i32, z: bool| if z { x } else { y }),
+        seed: 3,
+        runs: 2000,
+    )
+    assert!(a != b && c != a)
 }
 
 fn kav_target(_ x: u64) -> u64 {
@@ -84,8 +189,10 @@ fn kav_target(_ x: u64) -> u64 {
 fn known_answer_digest_matches_on_every_backend() {
     // Recorded identically from sonatina and native. Every backend's test run
     // checks itself against this one constant, so a backend that computes
-    // the fold, the generator or the PRNG differently fails here.
-    let d = digest_of(kav_target, seed: 12345, runs: 10000)
+    // the fold, the generator or the PRNG differently fails here. Unchanged
+    // by the multi-argument refactor: single-argument draws consume the same
+    // random stream as before.
+    let d = digest_of(target1(kav_target), seed: 12345, runs: 10000)
     assert!(
         d == 0x6e8bfbbd6b85134f314e6442618a6073d4a564791d0fbc3d568948fe62d91015,
     )

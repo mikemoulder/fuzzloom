@@ -1,32 +1,45 @@
-//! Failure shrinking for word inputs.
+//! Failure shrinking.
 //!
-//! Two phases, neither of which needs the failure to be monotone:
+//! Single-argument shrinking has two phases, neither of which needs the
+//! failure to be monotone:
 //!
 //! 1. Small-value sweep: try `lo, lo + 1, ..., lo + SWEEP - 1` in order and
 //!    take the first that fails. Small counterexamples are the most readable,
 //!    and this finds them exactly.
-//! 2. Greedy descent: from the best failing word, try stepping down by the
-//!    floor `lo` itself, then by exact powers of two (2^k for k from the top
-//!    bit of the distance down to 0). The first candidate that still fails
-//!    becomes the new best and the scan restarts.
+//! 2. Greedy descent: from the best failing word, try the floor `lo` itself,
+//!    then `best - 2^k` for k from the top bit of the distance down to 0. The
+//!    first candidate that still fails becomes the new best and the scan
+//!    restarts. Exact powers of two matter: steps of `best / 2^j` can all
+//!    share a parity, which under zigzag encoding means all share a sign, and
+//!    the descent then stalls on the first input.
 //!
-//! Guarantee when `complete` is true: the result fails, `lo` passes (unless
-//! the result is `lo`), and no `result - 2^k >= lo` fails. That is a local
-//! minimum, not necessarily the global one. Exact powers of two matter: steps
-//! of `best / 2^j` can all share a parity, which under zigzag encoding means
-//! all share a sign, and the descent then stalls on the first input.
+//! Multi-argument inputs are shrunk in rounds until a round changes nothing.
+//! Each round shrinks one coordinate at a time, holding the others fixed,
+//! then lowers all coordinates together (all to the floor, then all by the
+//! same 2^k). The joint move is what escapes diagonals such as `a == b` or
+//! `b == a + 1`, where every single-coordinate move passes. The sweep runs
+//! only in the first round; later rounds use greedy descent, which already
+//! re-checks the floor.
+//!
+//! Guarantee when `complete` is true: the result fails; for every argument
+//! i, replacing word i by any `w_i - 2^k >= lo_i` (others fixed) passes; and
+//! lowering every argument by the same 2^k (staying >= the floors) passes.
+//! That is a local minimum under those moves, not necessarily the global
+//! one. When the budget runs out, `complete` is false and the result
+//! is the best failing input found so far (it still fails).
 
-use ingot::word::Word
 use ingot::bias::bit_len
+use ingot::input::Input
+use ingot::property::{Property, prop1}
 
 /// Width of the small-value sweep in phase 1.
 pub const SWEEP: u256 = 256
 
 /// Result of a shrink.
 pub struct Shrunk {
-    /// Smallest failing word found.
-    pub value: u256,
-    /// Number of times the failure predicate was evaluated.
+    /// Smallest failing input found.
+    pub input: Input,
+    /// Number of times the property was evaluated.
     pub attempts: u64,
     /// True if shrinking reached a local minimum, false if the budget ran out.
     pub complete: bool,
@@ -34,42 +47,47 @@ pub struct Shrunk {
 
 impl Copy for Shrunk {}
 
-/// Shrinks the failing word `failing` toward `lo`. A candidate word `c`
-/// still fails when `holds(T::from_word(c))` is false.
-pub fn shrink<T: Word, P: Fn(T) -> bool>(_ holds: P, failing: u256, lo: u256, budget: u64) -> Shrunk
+/// Shrinks argument `i` of the failing input `x` toward `lo`, holding the
+/// other arguments fixed. Spends at most `budget` evaluations.
+pub fn shrink_component<P: Property>(
+    _ p: P,
+    _ x: Input,
+    i: u64,
+    lo: u256,
+    budget: u64,
+    sweep: bool,
+) -> Shrunk
 uses P::E
 {
-    var best = failing
+    var best = x.get(i)
     var attempts: u64 = 0
 
-    // Phase 1: small-value sweep.
-    var c = lo
-    while c < best && c - lo < SWEEP {
-        if attempts >= budget {
-            return Shrunk { value: best, attempts, complete: false }
+    if sweep {
+        var c = lo
+        while c < best && c - lo < SWEEP {
+            if attempts >= budget {
+                return Shrunk { input: x.with(i, best), attempts, complete: false }
+            }
+            attempts += 1
+            if !p.holds(x.with(i, c)) {
+                return Shrunk { input: x.with(i, c), attempts, complete: true }
+            }
+            c += 1
         }
-        attempts += 1
-        if !holds(T::from_word(c)) {
-            return Shrunk { value: c, attempts, complete: true }
-        }
-        c += 1
     }
 
-    // Phase 2: greedy descent by exact powers of two. Each round first
-    // tries `lo` itself, then best - 2^k for k from the top bit of the
-    // distance down to 0, and restarts from the first candidate that fails.
     var progressed = true
     while progressed {
         progressed = false
         if best == lo {
-            return Shrunk { value: best, attempts, complete: true }
+            return Shrunk { input: x.with(i, best), attempts, complete: true }
         }
         if attempts >= budget {
-            return Shrunk { value: best, attempts, complete: false }
+            return Shrunk { input: x.with(i, best), attempts, complete: false }
         }
         attempts += 1
-        if !holds(T::from_word(lo)) {
-            return Shrunk { value: lo, attempts, complete: true }
+        if !p.holds(x.with(i, lo)) {
+            return Shrunk { input: x.with(i, lo), attempts, complete: true }
         }
         var k = bit_len(best - lo)
         while k > 0 {
@@ -77,11 +95,11 @@ uses P::E
             let step: u256 = 1 << k
             if step <= best - lo {
                 if attempts >= budget {
-                    return Shrunk { value: best, attempts, complete: false }
+                    return Shrunk { input: x.with(i, best), attempts, complete: false }
                 }
                 attempts += 1
                 let candidate = best - step
-                if !holds(T::from_word(candidate)) {
+                if !p.holds(x.with(i, candidate)) {
                     best = candidate
                     progressed = true
                     k = 0
@@ -89,115 +107,329 @@ uses P::E
             }
         }
     }
-    Shrunk { value: best, attempts, complete: true }
+    Shrunk { input: x.with(i, best), attempts, complete: true }
+}
+
+/// Shrinks a failing input toward `floor`, coordinate by coordinate.
+pub fn shrink_input<P: Property>(_ p: P, failing: Input, floor: Input, budget: u64) -> Shrunk
+uses P::E
+{
+    let arity = P::arity()
+    var best = failing
+    var attempts: u64 = 0
+    var first = true
+    var progressed = true
+    while progressed {
+        progressed = false
+        var i: u64 = 0
+        while i < arity {
+            let r = shrink_component(
+                p,
+                best,
+                i,
+                lo: floor.get(i),
+                budget: budget - attempts,
+                sweep: first,
+            )
+            attempts += r.attempts
+            if !r.input.same(best) {
+                best = r.input
+                progressed = true
+            }
+            if !r.complete {
+                return Shrunk { input: best, attempts, complete: false }
+            }
+            i += 1
+        }
+        first = false
+        if arity >= 2 {
+            let j = shrink_jointly(p, best, floor, budget: budget - attempts)
+            attempts += j.attempts
+            if !j.input.same(best) {
+                best = j.input
+                progressed = true
+            }
+            if !j.complete {
+                return Shrunk { input: best, attempts, complete: false }
+            }
+        }
+    }
+    Shrunk { input: best, attempts, complete: true }
+}
+
+/// Lowers every argument together: first all to their floors, then all by
+/// the same 2^k (k from the top bit of the smallest distance down to 0).
+/// This moves along diagonals such as `a == b` or `b == a + 1`, where every
+/// single-coordinate move passes and coordinate descent is stuck.
+pub fn shrink_jointly<P: Property>(_ p: P, _ x: Input, _ floor: Input, budget: u64) -> Shrunk
+uses P::E
+{
+    let arity = P::arity()
+    var best = x
+    var attempts: u64 = 0
+    if attempts >= budget {
+        return Shrunk { input: best, attempts, complete: false }
+    }
+    attempts += 1
+    var all_lo = best
+    var i: u64 = 0
+    while i < arity {
+        all_lo = all_lo.with(i, floor.get(i))
+        i += 1
+    }
+    if !all_lo.same(best) && !p.holds(all_lo) {
+        return Shrunk { input: all_lo, attempts, complete: true }
+    }
+    var progressed = true
+    while progressed {
+        progressed = false
+        var room = best.get(0) - floor.get(0)
+        i = 1
+        while i < arity {
+            let d = best.get(i) - floor.get(i)
+            if d < room { room = d }
+            i += 1
+        }
+        var k = bit_len(room)
+        while k > 0 {
+            k -= 1
+            let step: u256 = 1 << k
+            if attempts >= budget {
+                return Shrunk { input: best, attempts, complete: false }
+            }
+            attempts += 1
+            var c = best
+            i = 0
+            while i < arity {
+                c = c.with(i, best.get(i) - step)
+                i += 1
+            }
+            if !p.holds(c) {
+                best = c
+                progressed = true
+                k = 0
+            }
+        }
+    }
+    Shrunk { input: best, attempts, complete: true }
+}
+
+/// Single-argument helper for tests and simple callers: shrinks word
+/// `failing` toward `lo` for a property built with `prop1`.
+///
+/// There is deliberately no generic `shrink<T, F>(f, ...)` that wraps `f` in
+/// `prop1` itself: wrapping a generic callable parameter in a struct whose
+/// impl forwards its effect row, then calling it through a generic bound,
+/// crashes Fe 26.6.0 (error[16-0004]; see spike/compiler-bugs). Wrapping a
+/// concrete callable, as every harness does, is fine.
+pub fn shrink_word<P: Property>(_ p: P, failing: u256, lo: u256, budget: u64) -> Shrunk
+uses P::E
+{
+    shrink_input(
+        p,
+        failing: Input::one(failing),
+        floor: Input::one(lo),
+        budget,
+    )
 }
 
 #[test]
 fn shrinks_threshold_failure_to_the_threshold() {
-    let r = shrink(
-        |w: u256| !(w >= 1000),
+    let r = shrink_word(
+        prop1(|w: u256| !(w >= 1000)),
         failing: 98765,
         lo: 0,
         budget: 10000,
     )
-    assert!(r.value == 1000)
+    assert!(r.input.w0 == 1000)
     assert!(r.complete)
 }
 
 #[test]
 fn shrinks_to_floor_when_everything_fails() {
-    let r = shrink(
-        |w: u256| !(true),
+    let r = shrink_word(
+        prop1(|w: u256| false),
         failing: u256::max(),
         lo: 5,
         budget: 10000,
     )
-    assert!(r.value == 5)
+    assert!(r.input.w0 == 5)
 }
 
 #[test]
 fn handles_non_monotone_failures() {
     // Fails only on multiples of 7 above 100: the answer is 105, which a
     // plain binary search over a monotone predicate can miss.
-    let r = shrink(
-        |w: u256| !(w > 100 && w % 7 == 0),
+    let r = shrink_word(
+        prop1(|w: u256| !(w > 100 && w % 7 == 0)),
         failing: 7000,
         lo: 0,
         budget: 10000,
     )
-    assert!(r.value == 105)
+    assert!(r.input.w0 == 105)
 }
 
 #[test]
 fn shrinks_top_of_u64_window() {
-    let r = shrink(
-        |w: u256| !(w > 0xFFFFFFFFFFFFFF00 && w <= 0xFFFFFFFFFFFFFFFF),
+    let r = shrink_word(
+        prop1(
+            |w: u256| !(w > 0xFFFFFFFFFFFFFF00 && w <= 0xFFFFFFFFFFFFFFFF),
+        ),
         failing: 0xFFFFFFFFFFFFFFF3,
         lo: 0,
         budget: 10000,
     )
-    assert!(r.value == 0xFFFFFFFFFFFFFF01)
+    assert!(r.input.w0 == 0xFFFFFFFFFFFFFF01)
 }
 
 #[test]
 fn respects_budget() {
-    let r = shrink(
-        |w: u256| !(w >= 1000000),
+    let r = shrink_word(
+        prop1(|w: u256| !(w >= 1000000)),
         failing: u256::max(),
         lo: 0,
         budget: 3,
     )
     assert!(!r.complete)
     assert!(r.attempts == 3)
-    assert!(r.value == u256::max())
+    assert!(r.input.w0 == u256::max())
 }
 
 #[test]
 fn sweep_finds_small_exact_answer() {
-    let r = shrink(
-        |w: u256| !(w == 0 || w >= 37),
+    let r = shrink_word(
+        prop1(|w: u256| !(w == 0 || w >= 37)),
         failing: 900000,
         lo: 1,
         budget: 10000,
     )
-    assert!(r.value == 37)
+    assert!(r.input.w0 == 37)
 }
 
 #[test]
 fn never_returns_a_passing_value() {
-    let r = shrink(
-        |w: u256| !(w == 4242),
+    let r = shrink_word(
+        prop1(|w: u256| !(w == 4242)),
         failing: 4242,
         lo: 0,
         budget: 10000,
     )
-    assert!(r.value == 4242)
+    assert!(r.input.w0 == 4242)
 }
 
 #[test]
 fn power_of_two_steps_cross_parity() {
     // Regression: best = 2^38 - 1 with best / 2^j steps made every candidate
     // even, so an odd-only failure never shrank. Failing set: odd words >= 1999.
-    let r = shrink(
-        |w: u256| !(w % 2 == 1 && w >= 1999),
+    let r = shrink_word(
+        prop1(|w: u256| !(w % 2 == 1 && w >= 1999)),
         failing: 0x3fffffffff,
         lo: 0,
         budget: 10000,
     )
-    assert!(r.value == 1999 && r.complete)
+    assert!(r.input.w0 == 1999 && r.complete)
+}
+
+fn multiple_above_300(_ w: u256) -> bool {
+    !(w > 300 && (w % 3 == 0 || w % 5 == 0))
 }
 
 #[test]
 fn complete_result_is_a_verified_local_minimum() {
-    let holds = |w: u256| !(w > 300 && (w % 3 == 0 || w % 5 == 0))
-    let r = shrink(holds, failing: 999999, lo: 0, budget: 100000)
+    let r = shrink_word(
+        prop1(multiple_above_300),
+        failing: 999999,
+        lo: 0,
+        budget: 100000,
+    )
     assert!(r.complete)
-    assert!(!holds(r.value))
+    assert!(!multiple_above_300(r.input.w0))
     var k: u256 = 0
     while k < 256 {
         let step: u256 = 1 << k
-        if step <= r.value {
-            assert!(holds(r.value - step))
+        if step <= r.input.w0 {
+            assert!(multiple_above_300(r.input.w0 - step))
+        }
+        k += 1
+    }
+}
+
+fn overdraw(_ balance: u64, _ amount: u64) -> bool {
+    // Bug: allows withdrawing exactly balance + 1.
+    amount <= balance || amount > balance + 1
+}
+
+#[test]
+fn shrinks_two_arguments_coordinate_wise() {
+    use ingot::property::prop2
+    let r = shrink_input(
+        prop2(overdraw),
+        failing: Input::two(987654, 987655),
+        floor: Input::zero(),
+        budget: 100000,
+    )
+    assert!(r.complete)
+    assert!(r.input.w0 == 0 && r.input.w1 == 1)
+}
+
+fn diagonal(_ a: u256, _ b: u256) -> bool {
+    a != b
+}
+
+#[test]
+fn joint_move_escapes_a_diagonal() {
+    use ingot::property::prop2
+    // Every single-coordinate move from (n, n) passes; only the joint move
+    // makes progress.
+    let r = shrink_input(
+        prop2(diagonal),
+        failing: Input::two(123456789, 123456789),
+        floor: Input::zero(),
+        budget: 100000,
+    )
+    assert!(r.complete && r.input.w0 == 0 && r.input.w1 == 0)
+}
+
+fn coupled(_ a: u32, _ b: u32, _ c: u32) -> bool {
+    // Fails when the three sum past a threshold; minimal failures are on the
+    // plane a + b + c == 1000, so no single coordinate can reach 0 alone.
+    (a as u64) + (b as u64) + (c as u64) < 1000
+}
+
+#[test]
+fn three_argument_result_is_a_coordinate_wise_local_minimum() {
+    use ingot::property::prop3
+    let p = prop3(coupled)
+    let r = shrink_input(
+        p,
+        failing: Input::three(400000, 300000, 200000),
+        floor: Input::zero(),
+        budget: 100000,
+    )
+    assert!(r.complete)
+    assert!(!p.holds(r.input))
+    var i: u64 = 0
+    while i < 3 {
+        var k: u256 = 0
+        while k < 64 {
+            let step: u256 = 1 << k
+            if step <= r.input.get(i) {
+                assert!(p.holds(r.input.with(i, r.input.get(i) - step)))
+            }
+            k += 1
+        }
+        i += 1
+    }
+    // ...and no joint step of 2^k on all three still fails.
+    var k: u256 = 0
+    while k < 64 {
+        let step: u256 = 1 << k
+        if step <= r.input.w0 && step <= r.input.w1 && step <= r.input.w2 {
+            assert!(
+                p.holds(
+                    Input::three(r.input.w0 - step, r.input.w1 - step, r.input.w2 - step),
+                ),
+            )
         }
         k += 1
     }

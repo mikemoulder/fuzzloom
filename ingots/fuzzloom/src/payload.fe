@@ -1,34 +1,56 @@
 //! Result payloads. A harness test ends by reverting with exactly one of
 //! these ABI-encoded custom errors; the CLI reads it from `fe test` output.
 //! The byte encoding is identical on the sonatina and native backends.
-//! Field order and types are a frozen contract with packages/cli.
+//!
+//! Frozen contract with packages/cli: field order and types do not change
+//! without a matching decoder change. Inputs are always three words; words
+//! past `arity` are zero.
 
-/// The property failed. `original` is the first failing input word and
-/// `shrunk` the smallest failing word found from it.
+/// The property failed. `original` is the first failing input and `shrunk`
+/// the smallest failing input found from it.
 #[error]
 pub struct Counterexample {
     pub seed: u64,
     pub iteration: u64,
-    pub original: u256,
-    pub shrunk: u256,
+    pub arity: u64,
+    pub original0: u256,
+    pub original1: u256,
+    pub original2: u256,
+    pub shrunk0: u256,
+    pub shrunk1: u256,
+    pub shrunk2: u256,
     pub shrink_attempts: u64,
     pub shrink_complete: bool,
 }
 
 /// The property held for every generated input.
 #[error]
-pub struct Passed { pub seed: u64, pub runs: u64 }
+pub struct Passed { pub seed: u64, pub runs: u64, pub arity: u64 }
 
 /// Result of replaying one saved input against a property.
 #[error]
-pub struct Replayed { pub input: u256, pub failed: bool }
+pub struct Replayed {
+    pub arity: u64,
+    pub input0: u256,
+    pub input1: u256,
+    pub input2: u256,
+    pub failed: bool,
+}
 
-/// The input word a campaign generates at `iteration` (used to recover the
-/// input when a property aborts instead of returning false).
+/// The input a campaign draws at `iteration`, without evaluating anything.
+/// Used to recover the input when a property aborts instead of returning
+/// false.
 #[error]
-pub struct Generated { pub seed: u64, pub iteration: u64, pub input: u256 }
+pub struct Generated {
+    pub seed: u64,
+    pub iteration: u64,
+    pub arity: u64,
+    pub input0: u256,
+    pub input1: u256,
+    pub input2: u256,
+}
 
-/// A fold of a function's outputs over a deterministic input stream, for
+/// A fold of a function's outputs over the campaign input stream, for
 /// comparing backends.
 #[error]
-pub struct Digest { pub seed: u64, pub runs: u64, pub acc: u256 }
+pub struct Digest { pub seed: u64, pub runs: u64, pub arity: u64, pub acc: u256 }
