@@ -54,13 +54,26 @@ impl Biased {
     }
 }
 
+/// A biased draw, recording whether it came from the edge table.
+pub struct Tracked { pub word: u256, pub edge: bool }
+
+impl Copy for Tracked {}
+
+impl Biased {
+    /// Same draw as `gen`, consuming exactly the same randomness, but also
+    /// reporting whether the edge table was used.
+    pub fn gen_tracked(self, _ rng: mut Rng) -> Tracked {
+        if self.every != 0 && rng.next_u64() % self.every == 0 {
+            return Tracked { word: edge(lo: self.range.lo, hi: self.range.hi, mut rng), edge: true }
+        }
+        Tracked { word: self.range.gen(mut rng), edge: false }
+    }
+}
+
 impl Gen for Biased {
     uses E = ()
     fn gen(self, _ rng: mut Rng) -> u256 {
-        if self.every != 0 && rng.next_u64() % self.every == 0 {
-            return edge(lo: self.range.lo, hi: self.range.hi, mut rng)
-        }
-        self.range.gen(mut rng)
+        self.gen_tracked(mut rng).word
     }
 }
 

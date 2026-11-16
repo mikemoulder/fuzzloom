@@ -8,7 +8,9 @@
 //!
 //! Each argument is drawn independently with boundary bias. For two or more
 //! arguments, one draw in eight then correlates argument 1 with argument 0:
-//! equal, one above, or one below (clamped to argument 1's bounds). Whole bug
+//! equal, one above, or one below. If the related value does not fit
+//! argument 1's bounds, the inverse relation is applied to argument 0, so
+//! arguments of very different widths still get correlated. Whole bug
 //! classes live on that diagonal (transfer to self, amount == balance,
 //! off-by-one between two inputs) and independent 256-bit draws essentially
 //! never land on it.
@@ -21,32 +23,111 @@ use ingot::input::{Bounds, Input}
 /// One correlated draw in this many, for arity >= 2.
 pub const CORRELATE_EVERY: u64 = 8
 
-/// Draws the next input.
-pub fn draw(_ b: Bounds, arity: u64, _ rng: mut Rng) -> Input {
+/// What a campaign actually exercised. Lets a `Passed` result be judged:
+/// how many argument draws were edge values, how many inputs were
+/// correlated, and which argument extremes were reached.
+pub struct Stats {
+    /// Inputs drawn.
+    pub draws: u64,
+    /// Argument draws taken from the edge table (up to arity per input).
+    pub edge_args: u64,
+    /// Inputs whose argument 1 was correlated with argument 0.
+    pub correlated: u64,
+    /// Bit 2i set: argument i took its lower bound. Bit 2i + 1: its upper.
+    pub extremes: u64,
+}
+
+impl Copy for Stats {}
+
+impl Stats {
+    pub fn new() -> Self {
+        Stats { draws: 0, edge_args: 0, correlated: 0, extremes: 0 }
+    }
+
+    /// Mask with both extreme bits set for every argument of `arity`.
+    pub fn all_extremes(_ arity: u64) -> u64 {
+        (1 << (2 * arity)) - 1
+    }
+}
+
+/// Draws the next input, updating `stats`. Consumes exactly the same
+/// randomness as `draw`, so statistics never change a seed's inputs.
+pub fn draw_tracked(_ b: Bounds, arity: u64, _ rng: mut Rng, _ stats: mut Stats) -> Input {
     var x = Input::zero()
     var i: u64 = 0
     while i < arity {
         let g = Biased::of(Range::between(lo: b.lo.get(i), hi: b.hi.get(i)))
-        x = x.with(i, g.gen(mut rng))
+        let t = g.gen_tracked(mut rng)
+        x = x.with(i, t.word)
+        if t.edge {
+            stats.edge_args += 1
+        }
         i += 1
     }
     if arity >= 2 && rng.next_u64() % CORRELATE_EVERY == 0 {
-        let a = x.w0
-        let lo1 = b.lo.w1
-        let hi1 = b.hi.w1
+        // Relation between the two arguments: pick 0 is b == a, pick 1 is
+        // b == a + 1, pick 2 is b == a - 1. Apply it to argument 1; if that
+        // leaves argument 1's range (typical when argument 0 is much wider),
+        // apply the inverse to argument 0 instead.
         let pick = rng.next_u64() % 3
-        var c = a
-        if pick == 1 && a < u256::max() {
-            c = a + 1
+        let a = x.w0
+        let bw = x.w1
+        var fwd_ok = true
+        var fwd = a
+        if pick == 1 {
+            if a == u256::max() {
+                fwd_ok = false
+            } else {
+                fwd = a + 1
+            }
         }
-        if pick == 2 && a > 0 {
-            c = a - 1
+        if pick == 2 {
+            if a == 0 { fwd_ok = false } else { fwd = a - 1 }
         }
-        if c >= lo1 && c <= hi1 {
-            x = x.with(1, c)
+        if fwd_ok && fwd >= b.lo.w1 && fwd <= b.hi.w1 {
+            x = x.with(1, fwd)
+            stats.correlated += 1
+        } else {
+            var inv_ok = true
+            var inv = bw
+            if pick == 1 {
+                if bw == 0 {
+                    inv_ok = false
+                } else {
+                    inv = bw - 1
+                }
+            }
+            if pick == 2 {
+                if bw == u256::max() {
+                    inv_ok = false
+                } else {
+                    inv = bw + 1
+                }
+            }
+            if inv_ok && inv >= b.lo.w0 && inv <= b.hi.w0 {
+                x = x.with(0, inv)
+                stats.correlated += 1
+            }
         }
     }
+    i = 0
+    while i < arity {
+        if x.get(i) == b.lo.get(i) {
+            stats.extremes = stats.extremes | (1 << (2 * i))
+        }
+        if x.get(i) == b.hi.get(i) {
+            stats.extremes = stats.extremes | (1 << (2 * i + 1))
+        }
+        i += 1
+    }
+    stats.draws += 1
     x
+}
+
+/// Draws the next input.
+pub fn draw(_ b: Bounds, arity: u64, _ rng: mut Rng) -> Input {
+    var stats = Stats::new()
+    draw_tracked(b, arity, mut rng, mut stats)
 }
 
 /// The input a campaign with these parameters draws at `iteration`.
@@ -114,4 +195,54 @@ fn generated_at_replays_the_stream() {
         i += 1
     }
     assert!(generated_at(b, arity: 2, seed: 99, iteration: 36).same(x))
+}
+
+#[test]
+fn stats_measure_what_the_campaign_exercised() {
+    let b = Bounds::full(u256::max(), 0xFFFF, 0)
+    var rng = Rng::new(3)
+    var stats = Stats::new()
+    var i: u64 = 0
+    while i < 8000 {
+        let _x = draw_tracked(b, arity: 2, mut rng, mut stats)
+        i += 1
+    }
+    assert!(stats.draws == 8000)
+    // One argument draw in four is an edge: about 4000 of 16000.
+    assert!(stats.edge_args > 3500 && stats.edge_args < 4500)
+    // One input in eight is correlated: about 1000. Regression: before the
+    // inverse relation, a u256 argument next to a u16 one correlated only
+    // 81 of 8000 inputs, because a's value almost never fit b's range.
+    assert!(stats.correlated > 850 && stats.correlated < 1150)
+    assert!(stats.extremes == Stats::all_extremes(2))
+}
+
+#[test]
+fn tracking_does_not_change_the_stream() {
+    let b = Bounds::full(u256::max(), 255, 1)
+    var r1 = Rng::new(77)
+    var r2 = Rng::new(77)
+    var stats = Stats::new()
+    var i: u64 = 0
+    while i < 500 {
+        assert!(
+            draw(b, arity: 3, mut r1).same(draw_tracked(b, arity: 3, mut r2, mut stats)),
+        )
+        i += 1
+    }
+}
+
+#[test]
+fn correlation_works_across_argument_widths() {
+    // amount: u256 next to fee_bps: u16. The diagonal must still be reached.
+    let b = Bounds::full(u256::max(), 0xFFFF, 0)
+    var rng = Rng::new(19)
+    var equal: u64 = 0
+    var i: u64 = 0
+    while i < 4000 {
+        let x = draw(b, arity: 2, mut rng)
+        if x.w0 == x.w1 { equal += 1 }
+        i += 1
+    }
+    assert!(equal > 100)
 }
