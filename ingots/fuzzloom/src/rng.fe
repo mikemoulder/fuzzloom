@@ -36,28 +36,31 @@ impl Rng {
 
     /// Uniform value in `0..=max`, by masked rejection sampling: draw from
     /// the smallest power-of-two range covering `max` and retry above it.
-    /// Unbiased for every `max`, at fewer than two draws on average. Maxima
-    /// below 2^64 consume one 64-bit draw per attempt.
+    /// Unbiased for every `max`, at fewer than two draws on average. When
+    /// `max` is already 2^k - 1 (every full-width type) the draw is masked
+    /// once with no rejection. Maxima below 2^64 use one 64-bit draw.
     pub fn below_or_eq(mut self, _ max: u256) -> u256 {
         if max == u256::max() {
             return self.next_u256()
         }
-        var bits: u256 = 0
-        var v = max
-        while v != 0 {
-            v = v >> 1
-            bits += 1
-        }
+        let bits = bit_len(max)
         let mask: u256 = if bits == 256 {
             u256::max()
         } else {
             (1 << bits) - 1
         }
+        let exact = mask == max
         if max <= 0xFFFFFFFFFFFFFFFF {
+            if exact {
+                return (self.next_u64() as u256) & mask
+            }
             while true {
                 let c = (self.next_u64() as u256) & mask
                 if c <= max { return c }
             }
+        }
+        if exact {
+            return self.next_u256() & mask
         }
         while true {
             let c = self.next_u256() & mask
@@ -65,6 +68,45 @@ impl Rng {
         }
         0
     }
+}
+
+/// Number of significant bits in `x` (0 for 0). Binary search: eight
+/// shift-and-compare steps instead of a loop of up to 256 iterations, which
+/// matters on the EVM, where every draw pays for it.
+pub fn bit_len(_ x: u256) -> u256 {
+    if x == 0 { return 0 }
+    var v = x
+    var n: u256 = 1
+    if v >> 128 != 0 {
+        v = v >> 128
+        n += 128
+    }
+    if v >> 64 != 0 {
+        v = v >> 64
+        n += 64
+    }
+    if v >> 32 != 0 {
+        v = v >> 32
+        n += 32
+    }
+    if v >> 16 != 0 {
+        v = v >> 16
+        n += 16
+    }
+    if v >> 8 != 0 {
+        v = v >> 8
+        n += 8
+    }
+    if v >> 4 != 0 {
+        v = v >> 4
+        n += 4
+    }
+    if v >> 2 != 0 {
+        v = v >> 2
+        n += 2
+    }
+    if v >> 1 != 0 { n += 1 }
+    n
 }
 
 /// splitmix64 finaliser (Steele, Lea, Flood, 2014): a bijective mixer with
@@ -174,4 +216,32 @@ fn below_or_eq_is_unbiased_for_non_power_of_two_ranges() {
         i += 1
     }
     assert!(low > 1800 && low < 2200)
+}
+
+#[test]
+fn bit_len_matches_a_linear_count_everywhere() {
+    var k: u256 = 0
+    while k < 256 {
+        let p: u256 = 1 << k
+        assert!(bit_len(p) == k + 1)
+        assert!(bit_len(p - 1) == k)
+        if k > 0 {
+            assert!(bit_len(p + 1) == k + 1)
+        }
+        k += 1
+    }
+    assert!(bit_len(u256::max()) == 256)
+}
+
+#[test]
+fn full_width_maxima_use_the_exact_mask_path() {
+    // Same stream as an explicit mask: no rejection draws consumed.
+    var a = Rng::new(5)
+    var b = Rng::new(5)
+    assert!(
+        a.below_or_eq(0xFFFFFFFF) == (b.next_u64() as u256) & 0xFFFFFFFF,
+    )
+    assert!(
+        a.below_or_eq(u128::max() as u256) == b.next_u256() & (u128::max() as u256),
+    )
 }

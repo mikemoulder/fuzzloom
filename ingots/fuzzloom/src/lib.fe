@@ -1,7 +1,7 @@
-pub use rng::{Rng, splitmix64, derive_seed}
+pub use rng::{Rng, splitmix64, derive_seed, bit_len}
 pub use word::Word
 pub use gen::{Gen, Range, Just, Map}
-pub use bias::{Biased, Tracked, edge, bit_len}
+pub use bias::{Biased, Tracked, edge}
 pub use input::{Input, Bounds, MAX_ARITY, top}
 pub use property::{Property, Prop1, Prop2, Prop3, prop1, prop2, prop3, bounds_of, arity_of}
 pub use draw::{draw, draw_tracked, generated_at, Stats, CORRELATE_EVERY}

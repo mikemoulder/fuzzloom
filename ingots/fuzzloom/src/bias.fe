@@ -4,16 +4,7 @@
 use ingot::rng::Rng
 use ingot::gen::{Gen, Range}
 
-/// Number of significant bits in `x` (0 for 0).
-pub fn bit_len(_ x: u256) -> u256 {
-    var n: u256 = 0
-    var v = x
-    while v != 0 {
-        v = v >> 1
-        n += 1
-    }
-    n
-}
+pub use ingot::rng::bit_len
 
 /// Picks an edge of `lo..=hi`: an endpoint, a neighbour of one, the midpoint,
 /// or a power-of-two boundary (2^k - 1, 2^k, 2^k + 1) that lies in range.

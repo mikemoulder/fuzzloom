@@ -30,7 +30,7 @@
 //! one. When the budget runs out, `complete` is false and the result
 //! is the best failing input found so far (it still fails).
 
-use ingot::bias::bit_len
+use ingot::rng::bit_len
 use ingot::input::Input
 use ingot::property::{Property, prop1}
 
