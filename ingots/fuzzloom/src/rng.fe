@@ -1,0 +1,89 @@
+//! Deterministic pseudo-random number generation.
+//!
+//! Fuzzloom uses xorshift64* (Vigna, 2014): small state, fast on both the EVM
+//! and native backends, and fully specified here so a recorded seed replays
+//! the same input stream on every machine and backend.
+
+/// A seeded xorshift64* generator. The same seed always yields the same stream.
+pub struct Rng {
+    pub state: u64,
+}
+
+impl Rng {
+    /// Creates a generator. Seed 0 is remapped, because xorshift has an
+    /// all-zero fixed point that would emit zeros forever.
+    pub fn new(_ seed: u64) -> Self {
+        let s = if seed == 0 { 0x9E3779B97F4A7C15 } else { seed }
+        Rng { state: s }
+    }
+
+    /// Next 64 random bits.
+    pub fn next_u64(mut self) -> u64 {
+        var x = self.state
+        x = x ^ (x >> 12)
+        x = x ^ (x << 25)
+        x = x ^ (x >> 27)
+        self.state = x
+        x.wrapping_mul(0x2545F4914F6CDD1D)
+    }
+
+    /// Next 256 random bits, built from four 64-bit draws (high word first).
+    pub fn next_u256(mut self) -> u256 {
+        let a: u256 = self.next_u64() as u256
+        let b: u256 = self.next_u64() as u256
+        let c: u256 = self.next_u64() as u256
+        let d: u256 = self.next_u64() as u256
+        (a << 192) | (b << 128) | (c << 64) | d
+    }
+
+    /// Uniform-ish value in `0..=max` (modulo bias is accepted for test generation).
+    pub fn below_or_eq(mut self, _ max: u256) -> u256 {
+        let r = self.next_u256()
+        if max == u256::max() { return r }
+        r % (max + 1)
+    }
+}
+
+#[test]
+fn same_seed_same_stream() {
+    var a = Rng::new(42)
+    var b = Rng::new(42)
+    var i: u64 = 0
+    while i < 1000 {
+        assert!(a.next_u64() == b.next_u64())
+        i += 1
+    }
+}
+
+#[test]
+fn different_seeds_diverge() {
+    var a = Rng::new(1)
+    var b = Rng::new(2)
+    assert!(a.next_u64() != b.next_u64())
+}
+
+#[test]
+fn zero_seed_is_not_stuck() {
+    var r = Rng::new(0)
+    let x = r.next_u64()
+    let y = r.next_u64()
+    assert!(x != 0 && y != 0 && x != y)
+}
+
+#[test]
+fn known_answer_vector() {
+    // Pins the algorithm: any change to the PRNG breaks recorded seeds.
+    var r = Rng::new(1)
+    assert!(r.next_u64() == 5180492295206395165)
+}
+
+#[test]
+fn below_or_eq_respects_bound() {
+    var r = Rng::new(9)
+    var i: u64 = 0
+    while i < 500 {
+        assert!(r.below_or_eq(10) <= 10)
+        i += 1
+    }
+    assert!(r.below_or_eq(0) == 0)
+}

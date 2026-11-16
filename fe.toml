@@ -1,0 +1,5 @@
+[workspace]
+name = "fuzzloom-workspace"
+version = "0.1.0"
+members = ["ingots/*", "examples/*"]
+exclude = ["target", "spike", ".fuzzloom"]
