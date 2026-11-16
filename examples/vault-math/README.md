@@ -7,7 +7,7 @@ Share accounting for a tokenized vault (ERC-4626 style), with four planted bugs.
 | Property | Arguments | Bug | Fuzzloom result (seed 7, 10,000 runs) |
 |---|---|---|---|
 | `prop_fee_matches_exact_math` | `amount: u64` | fee multiplication wraps above `u64::MAX / 30` | shrunk to `614891469123651721`, exactly the first amount that wraps |
-| `prop_withdraw_never_overdraws` | `balance: u128, amount: u128` | off by one: allows `amount == balance + 1` | found at iteration 4, shrunk to `(0, 1)` |
+| `prop_withdraw_never_overdraws` | `balance: u128, amount: u128` | off by one: allows `amount == balance + 1` | found at iteration 41, shrunk to `(0, 1)` |
 | `prop_redeem_rounds_toward_vault` | `shares, total_assets, total_supply: u64` | redeem rounds up, in favour of the user | shrunk to `(1, 0, 1)`: redeeming 1 share of an empty vault pays 1 |
 | `prop_share_price_defined` | `total_assets, total_supply: u64` | no guard for zero supply | aborts with `Panic(0x12)` (division by zero) |
 
@@ -22,7 +22,13 @@ How each one gets found:
 
 ## Properties that pass
 
-`prop_fee_exact_never_exceeds_amount`, `prop_deposit_redeem_no_profit` and `prop_deposit_is_monotone` hold for all 10,000 generated inputs, including the edge cases.
+These hold for all 10,000 generated inputs. A pass reports what it exercised, so it is a measured claim and not just a run count:
+
+| Property | Edge-value argument draws | Correlated inputs | Argument extremes reached |
+|---|---|---|---|
+| `prop_fee_exact_never_exceeds_amount` | 2,471 of 10,000 | n/a (one argument) | both bounds |
+| `prop_deposit_redeem_no_profit` | 7,489 of 30,000 | 1,237 | all six bounds |
+| `prop_deposit_is_monotone` | 7,489 of 30,000 | 1,237 | all six bounds |
 
 ## A bug we did not plant
 
@@ -39,7 +45,9 @@ The first version of this example minted shares 1:1 whenever the share supply wa
 | `diff_fee` | agree |
 | `diff_rounding_mode` | **differ** (planted: a rounding bias gated on `#[cfg(target)]`) |
 
-`diff_fee` agrees even though `fee` is buggy, because it is wrong the same way on both backends. Differential testing finds divergence between targets. Property testing finds wrong behaviour. They catch different bugs.
+`diff_fee` agrees even though `fee` is buggy, because it is wrong the same way on both backends.
+
+A note on gas: `fe test` caps a test at 1e9 gas on the EVM backend. An earlier build of the sampler ran out of gas at 62,513 runs for `diff_net_position`. A naive comparison would have reported that as a backend mismatch. Fuzzloom treats out-of-gas as an infrastructure result, never as a divergence. After an optimisation, the same digest fits about 290,000 runs. Differential testing finds divergence between targets. Property testing finds wrong behaviour. They catch different bugs.
 
 ## Running it
 
