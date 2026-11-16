@@ -16,7 +16,7 @@
 use ingot::rng::Rng
 use ingot::input::{Bounds, Input}
 use ingot::property::Property
-use ingot::draw::{draw, generated_at}
+use ingot::draw::{Stats, draw_tracked, generated_at}
 use ingot::shrink::{Shrunk, shrink_input}
 use ingot::payload::{Counterexample, Generated, Passed, Replayed}
 use std::evm::revert_error
@@ -33,6 +33,7 @@ pub struct Report {
     pub iteration: u64,
     pub original: Input,
     pub shrunk: Shrunk,
+    pub stats: Stats,
 }
 
 impl Copy for Report {}
@@ -44,12 +45,22 @@ uses P::E
 {
     let arity = P::arity()
     var rng = Rng::new(seed)
+    var stats = Stats::new()
     var i: u64 = 0
     while i < runs {
-        let x = draw(bounds, arity, mut rng)
+        let x = draw_tracked(bounds, arity, mut rng, mut stats)
         if !p.holds(x) {
             let s = shrink_input(p, failing: x, floor: bounds.lo, budget)
-            return Report { failed: true, arity, seed, runs, iteration: i, original: x, shrunk: s }
+            return Report {
+                failed: true,
+                arity,
+                seed,
+                runs,
+                iteration: i,
+                original: x,
+                shrunk: s,
+                stats,
+            }
         }
         i += 1
     }
@@ -61,6 +72,7 @@ uses P::E
         iteration: runs,
         original: Input::zero(),
         shrunk: Shrunk { input: Input::zero(), attempts: 0, complete: true },
+        stats,
     }
 }
 
@@ -96,7 +108,16 @@ pub fn conclude(_ r: Report) -> ! {
             },
         )
     }
-    revert_error(Passed { seed: r.seed, runs: r.runs, arity: r.arity })
+    revert_error(
+        Passed {
+            seed: r.seed,
+            runs: r.runs,
+            arity: r.arity,
+            edge_args: r.stats.edge_args,
+            correlated: r.stats.correlated,
+            extremes: r.stats.extremes,
+        },
+    )
 }
 
 /// Harness entry point: default campaign over every argument value.
@@ -285,4 +306,17 @@ fn generated_at_recovers_the_failing_input() {
     assert!(r.failed)
     let x = generated_at(bounds_of(p), arity: 2, seed: 5, iteration: r.iteration)
     assert!(x.same(r.original))
+}
+
+#[test]
+fn passing_campaign_reports_what_it_exercised() {
+    let r = find_all(
+        prop2(|a: u128, b: u16| (b as u128) <= u128::max()),
+        seed: 1,
+        runs: 4000,
+    )
+    assert!(!r.failed && r.stats.draws == 4000)
+    assert!(r.stats.extremes == Stats::all_extremes(2))
+    assert!(r.stats.edge_args > 1700 && r.stats.edge_args < 2300)
+    assert!(r.stats.correlated > 400)
 }

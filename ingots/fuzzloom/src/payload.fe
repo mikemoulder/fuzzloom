@@ -23,9 +23,19 @@ pub struct Counterexample {
     pub shrink_complete: bool,
 }
 
-/// The property held for every generated input.
+/// The property held for every generated input. The statistics say what
+/// was exercised: argument draws taken from the edge table, inputs whose
+/// arguments were correlated, and a bitmask of argument extremes reached
+/// (bit 2i: argument i hit its lower bound; bit 2i + 1: its upper bound).
 #[error]
-pub struct Passed { pub seed: u64, pub runs: u64, pub arity: u64 }
+pub struct Passed {
+    pub seed: u64,
+    pub runs: u64,
+    pub arity: u64,
+    pub edge_args: u64,
+    pub correlated: u64,
+    pub extremes: u64,
+}
 
 /// Result of replaying one saved input against a property.
 #[error]
