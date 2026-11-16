@@ -1,0 +1,30 @@
+// Minimal repro: internal access checking error (error[16-0004]) in Fe 26.6.0.
+// A struct implements `Fn(u256) -> _` with `uses E = P::E` (forwarding the
+// wrapped callable's effect row), and is then called through a generic
+// `F: Fn(u256) -> bool` bound.
+
+struct Negate<P> {
+    inner: P,
+}
+
+impl<P: Fn(u256) -> bool> Fn(u256) -> _ for Negate<P> {
+    uses E = P::E
+    type Out = bool
+
+    fn call(self, _ x: u256) -> bool uses E {
+        !(self.inner)(x)
+    }
+}
+
+fn apply<F: Fn(u256) -> bool>(_ f: F, _ x: u256) -> bool uses F::E {
+    f(x)
+}
+
+fn negate_apply<P: Fn(u256) -> bool>(_ p: own P, _ x: u256) -> bool uses P::E {
+    apply(Negate<P> { inner: p }, x)
+}
+
+#[test]
+fn repro() {
+    assert!(negate_apply(|x: u256| x > 5, 3))
+}
