@@ -13,6 +13,8 @@ export type Context = {
   fe: FeConfig;
   /** Called after every fe run, for progress output. */
   onRun?: (what: string, ms: number) => void;
+  /** fe replays allowed when shrinking an aborting property (default 16). */
+  abortShrinkBudget?: number;
 };
 
 export type Stats = { edgeArgs: bigint; correlated: bigint; extremes: bigint };
@@ -20,7 +22,7 @@ export type Stats = { edgeArgs: bigint; correlated: bigint; extremes: bigint };
 export type PropertyResult =
   | { status: "passed"; target: Target; runs: bigint; stats: Stats; feRuns: number; ms: number }
   | { status: "failed"; target: Target; iteration: bigint; original: Words; input: Words; shrinkAttempts: bigint; shrinkComplete: boolean; feRuns: number; ms: number }
-  | { status: "aborted"; target: Target; iteration: bigint; input: Words; abort: string; shrinkAborted: boolean; feRuns: number; ms: number }
+  | { status: "aborted"; target: Target; iteration: bigint; original: Words; input: Words; abort: string; shrinkAborted: boolean; shrinkReplays: number; shrinkComplete: boolean; feRuns: number; ms: number }
   | { status: "infra"; target: Target; reason: string; detail: string; feRuns: number; ms: number };
 
 export function workDir(userRoot: string): string {
@@ -96,11 +98,61 @@ export function runProperty(ctx: Context, target: Target, base: bigint, runs: bi
   const g = run({ mode: "input_at", base, iteration });
   if (g.kind !== "generated") return infra(g);
   const rep = run({ mode: "replay", input: g.input });
+  let reproduces: (o: Outcome) => boolean;
+  let abort: string;
+  let shrinkAborted: boolean;
   if (isAbort(rep)) {
-    return { status: "aborted", target, iteration, input: g.input, abort: describeAbort(rep), shrinkAborted: false, feRuns, ms };
+    abort = describeAbort(rep);
+    shrinkAborted = false;
+    reproduces = (o) => isAbort(o) && describeAbort(o) === abort;
+  } else if (rep.kind === "replayed" && rep.failed) {
+    abort = describeAbort(first);
+    shrinkAborted = true;
+    reproduces = (o) => o.kind === "replayed" && o.failed;
+  } else {
+    return { status: "infra", target, reason: "inconsistent", detail: "the recovered input neither fails nor aborts on replay", feRuns, ms };
   }
-  if (rep.kind === "replayed" && rep.failed) {
-    return { status: "aborted", target, iteration, input: g.input, abort: describeAbort(first), shrinkAborted: true, feRuns, ms };
+  const s = shrinkByReplay(target, g.input, ctx.abortShrinkBudget ?? 16, (w) => reproduces(run({ mode: "replay", input: w })));
+  return {
+    status: "aborted", target, iteration, original: g.input, input: s.input, abort, shrinkAborted,
+    shrinkReplays: s.replays, shrinkComplete: s.complete, feRuns, ms,
+  };
+}
+
+/**
+ * Coarse shrinking when every evaluation is a separate fe run (an aborting
+ * property cannot be shrunk inside Fe, since Fe cannot catch the abort).
+ * Per argument: try 0, otherwise keep halving while the failure reproduces.
+ * Rounds repeat until one makes no progress (complete) or the replay budget
+ * is spent. `reproduces` must demand the same failure (for aborts, the same
+ * panic code or revert message), so shrinking cannot slide onto a different
+ * bug.
+ */
+export function shrinkByReplay(target: Target, input: Words, budget: number, reproduces: (w: Words) => boolean): { input: Words; replays: number; complete: boolean } {
+  let best: Words = [...input];
+  let replays = 0;
+  const tryWith = (i: number, v: bigint): boolean => {
+    if (replays >= budget) return false;
+    const c: Words = [...best];
+    c[i] = v;
+    replays++;
+    if (reproduces(c)) {
+      best = c;
+      return true;
+    }
+    return false;
+  };
+  let progressed = true;
+  while (progressed && replays < budget) {
+    progressed = false;
+    for (let i = 0; i < target.args.length; i++) {
+      if (best[i] === 0n) continue;
+      if (tryWith(i, 0n)) {
+        progressed = true;
+        continue;
+      }
+      while (best[i]! > 1n && tryWith(i, best[i]! >> 1n)) progressed = true;
+    }
   }
-  return { status: "infra", target, reason: "inconsistent", detail: "the recovered input neither fails nor aborts on replay", feRuns, ms };
+  return { input: best, replays, complete: !progressed };
 }

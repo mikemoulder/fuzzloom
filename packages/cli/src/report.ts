@@ -45,8 +45,9 @@ export function formatResult(r: PropertyResult, id?: string): string[] {
         `${red("ABORT")} ${sig}  ${r.abort}  ${dim(`at input ${r.iteration + 1n}`)}`,
         ...values(t, r.input).map((l) => `      ${bold(l)}`),
         dim(r.shrinkAborted
-          ? "      the property returns false here; shrinking stopped because a smaller candidate aborted"
-          : `      recovered by bisection in ${r.feRuns} fe runs (Fe cannot catch an abort, so the payload had no input); not shrunk`),
+          ? "      the property returns false here; in-Fe shrinking stopped because a smaller candidate aborted"
+          : "      input recovered by bisection (Fe cannot catch an abort, so the payload carried none)"),
+        dim(`      shrunk by replay from ${t.args.map((a, i) => describe(r.original[i]!, a.type)).join(", ")} in ${r.shrinkReplays} fe runs${r.shrinkComplete ? "" : " (replay budget reached, may not be minimal)"}; ${r.feRuns} fe runs in total`),
         ...(id ? [dim(`      reproduce: fuzzloom reproduce ${id}`)] : []),
       ];
     case "infra":

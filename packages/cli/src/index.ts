@@ -97,7 +97,7 @@ function fuzz(root: string, opts: Opts): number {
     if (r.status === "failed" || r.status === "aborted") {
       const rec = makeRecord({
         kind: r.status === "failed" ? "property" : "abort",
-        target: t, input: r.input, ...(r.status === "failed" ? { original: r.original } : {}),
+        target: t, input: r.input, original: r.original,
         iteration: r.iteration, base, runs, backend, feVersion: version,
         ...(r.status === "aborted" ? { detail: r.abort } : {}),
       });
