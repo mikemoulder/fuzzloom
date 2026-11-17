@@ -11,6 +11,8 @@ import type { Case } from "./harness.ts";
 import { listRecords, loadRecord, makeRecord, recordWords, saveRecord, type FailureRecord } from "./store.ts";
 import { bold, dim, formatResult, green, red, toJson, values, yellow } from "./report.ts";
 import { wordToValue } from "./abi.ts";
+import { junitXml, type JUnitCase, type JUnitOutcome } from "./junit.ts";
+import { writeFileSync } from "node:fs";
 import type { Discovery } from "./discover.ts";
 import type { Backend, Outcome, Target } from "./types.ts";
 
@@ -30,11 +32,12 @@ Options:
   --only <name>     run only targets whose name contains this text
   --no-corpus       fuzz: skip the mutation campaigns seeded from saved failures
   --json            machine-readable output
+  --junit <file>    fuzz, diff, replay: also write a JUnit XML report
   -h, --help
 
 Exit codes: 0 all passed, 1 a property failed or aborted, 2 infrastructure error.`;
 
-type Opts = { seed?: string; runs?: string; backend: string; only?: string; json: boolean; "no-corpus": boolean };
+type Opts = { seed?: string; runs?: string; backend: string; only?: string; json: boolean; "no-corpus": boolean; junit?: string };
 
 /** Most saved failures seeding mutation campaigns, per property (most recently updated first). */
 const SEEDS_PER_TARGET = 8;
@@ -50,6 +53,7 @@ async function main(argv: string[]): Promise<number> {
       only: { type: "string" },
       json: { type: "boolean", default: false },
       "no-corpus": { type: "boolean", default: false },
+      junit: { type: "string" },
       help: { type: "boolean", short: "h", default: false },
     },
   });
@@ -133,6 +137,10 @@ async function fuzz(root: string, opts: Opts): Promise<number> {
   const failed = results.filter((x) => x.result.status === "failed" || x.result.status === "aborted").length;
   const infra = results.filter((x) => x.result.status === "infra").length;
   const passed = results.length - failed - infra;
+  writeJUnit(opts, `fuzzloom fuzz ${d.ingot}`, started, { command: "fuzz", seed: String(base), runs: String(runs), backend, fe_version: version },
+    results.map(({ result: r, record }) => junitCase(`${d.ingot}.fuzz`, r.target, formatResult(r, record),
+      r.status === "passed" ? "pass" : r.status === "infra" ? "error" : "failure",
+      r.status === "failed" ? "counterexample" : r.status === "aborted" ? "abort" : r.status === "infra" ? r.reason : undefined)));
   if (opts.json) {
     console.log(JSON.stringify(toJson({ ingot: d.ingot, seed: base, runs, backend, fe_version: version, skipped: d.skipped, results }), null, 2));
   } else {
@@ -156,6 +164,22 @@ function seedsFrom(root: string, d: Discovery, targets: Target[]): Map<string, S
     if (same.length) out.set(t.name, same.slice(0, SEEDS_PER_TARGET).map((r) => ({ record: r.id, input: recordWords(r) })));
   }
   return out;
+}
+
+/** One JUnit case from a result's terminal lines; the message is the headline without the status word. */
+function junitCase(classname: string, t: Target, lines: string[], outcome: JUnitOutcome, type?: string): JUnitCase {
+  const strip = (l: string) => l.replace(/\x1b\[[0-9;]*m/g, "");
+  const body = lines.map(strip).join("\n");
+  const name = `${t.name}(${t.args.map((a) => a.type).join(", ")})`;
+  const headline = strip(lines[0] ?? "").replace(/^\S+\s+/, "").trim();
+  const message = headline.startsWith(name) ? headline.slice(name.length).trim() : headline;
+  return { name, classname, outcome, message, ...(type ? { type } : {}), body };
+}
+
+function writeJUnit(opts: Opts, name: string, started: number, properties: Record<string, string>, cases: JUnitCase[]): void {
+  if (!opts.junit) return;
+  writeFileSync(resolve(opts.junit), junitXml({ name, timestamp: new Date(started), seconds: (Date.now() - started) / 1000, properties, cases }));
+  if (!opts.json) console.log(dim(`JUnit report written to ${opts.junit}`));
 }
 
 function seconds(since: number): string {
@@ -197,6 +221,10 @@ async function diff(root: string, opts: Opts): Promise<number> {
   }
   const diverged = results.filter((x) => x.result.status === "diverged").length;
   const infra = results.filter((x) => x.result.status === "infra").length;
+  writeJUnit(opts, `fuzzloom diff ${d.ingot}`, started, { command: "diff", seed: String(base), runs: String(runs), backends: "sonatina,native", fe_version: version },
+    results.map(({ result: r, record }) => junitCase(`${d.ingot}.diff`, r.target, formatDiff(r, record),
+      r.status === "agreed" ? "pass" : r.status === "infra" ? "error" : "failure",
+      r.status === "diverged" ? "divergence" : r.status === "infra" ? r.reason : undefined)));
   if (opts.json) console.log(JSON.stringify(toJson({ ingot: d.ingot, seed: base, runs, fe_version: version, results }), null, 2));
   else console.log(`\n${results.length - diverged - infra} agreed, ${diverged} diverged, ${infra} infrastructure errors in ${seconds(started)}  ${dim(`(repeat with --seed ${base})`)}`);
   return infra > 0 ? 2 : diverged > 0 ? 1 : 0;
@@ -314,6 +342,7 @@ async function replayAll(root: string, opts: Opts): Promise<number> {
   let failing = 0;
   let infra = 0;
   const out: unknown[] = [];
+  const started = Date.now();
   const vs = await verdicts(ctx, d, records);
   for (const [i, rec] of records.entries()) {
     const v = vs[i]!;
@@ -323,6 +352,13 @@ async function replayAll(root: string, opts: Opts): Promise<number> {
     out.push({ id: rec.id, reproduces: v.reproduces, text: v.text });
     if (!opts.json) console.log(`${label}  ${rec.id}  ${dim(v.text)}`);
   }
+  writeJUnit(opts, `fuzzloom replay ${d.ingot}`, started, { command: "replay", records: String(records.length) },
+    records.map((rec, i): JUnitCase => {
+      const v = vs[i]!;
+      const outcome: JUnitOutcome = v.reproduces === undefined ? "error" : v.reproduces ? "failure" : "pass";
+      const body = [`${rec.id}: ${v.text}`, ...rec.args.map((a, j) => `${a.name} = ${rec.values[j]}`), `reproduce: fuzzloom reproduce ${rec.id}`].join("\n");
+      return { name: rec.id, classname: `${d.ingot}.replay`, outcome, message: v.text, type: outcome === "failure" ? `${rec.kind}-still-failing` : outcome === "error" ? "infrastructure" : undefined, body };
+    }));
   if (opts.json) console.log(JSON.stringify(out, null, 2));
   else console.log(`\n${records.length - failing - infra} fixed, ${failing} still failing, ${infra} infrastructure errors`);
   return infra > 0 ? 2 : failing > 0 ? 1 : 0;
