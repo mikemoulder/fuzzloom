@@ -9,7 +9,7 @@ Share accounting for a tokenized vault (ERC-4626 style), with four planted bugs.
 | `prop_fee_matches_exact_math` | `amount: u64` | fee multiplication wraps above `u64::MAX / 30` | found at input 2, shrunk to `614891469123651721`, exactly the first amount that wraps |
 | `prop_withdraw_never_overdraws` | `balance: u128, amount: u128` | off by one: allows `amount == balance + 1` | found at input 19, shrunk to `(0, 1)` |
 | `prop_redeem_rounds_toward_vault` | `shares, total_assets, total_supply: u64` | redeem rounds up, in favour of the user | found at input 1, shrunk to `(1, 0, 1)`: redeeming 1 share of an empty vault pays 1 |
-| `prop_share_price_defined` | `total_assets, total_supply: u64` | no guard for zero supply | aborts with `Panic(0x12)` at input 13; input recovered by bisection and shrunk by replay to `(0, 0)` |
+| `prop_share_price_defined` | `total_assets, total_supply: u64` | no guard for zero supply | aborts with `Panic(0x12)` at input 13; input recovered by k-ary search on the run count and shrunk by replay to `(0, 0)` |
 
 Each bug is marked `PLANTED BUG` in `src/lib.fe` with its fix next to it. With all four fixes applied, all seven properties pass 10,000 runs.
 
