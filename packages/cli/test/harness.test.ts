@@ -3,8 +3,8 @@ import assert from "node:assert/strict";
 import { mkdtempSync, readFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join, resolve } from "node:path";
-import { fnv1a64, harnessBody, writeHarness } from "../src/harness.ts";
-import { runHarness } from "../src/fe.ts";
+import { caseName, fnv1a64, harnessBody, writeBatch, writeHarness, type Case } from "../src/harness.ts";
+import { runBatch, runHarness } from "../src/fe.ts";
 import { discover } from "../src/discover.ts";
 import type { Target } from "../src/types.ts";
 
@@ -24,6 +24,10 @@ test("harness bodies for every mode", () => {
     `input_at(prop2(prop_w), bounds: bounds_of(prop2(prop_w)), seed: derive_seed(7, ${id}), iteration: 41)`);
   const d: Target = { ...two, kind: "differential", returns: "u256" };
   assert.equal(harnessBody(d, { mode: "digest", base: 7n, runs: 5n }), `digest(target2(prop_w), seed: derive_seed(7, ${id}), runs: 5)`);
+  assert.equal(harnessBody(two, { mode: "replay_at", base: 7n, iteration: 3n }),
+    `replay(prop2(prop_w), input: generated_at(bounds_of(prop2(prop_w)), arity: arity_of(prop2(prop_w)), seed: derive_seed(7, ${id}), iteration: 3))`);
+  assert.equal(harnessBody(d, { mode: "evaluate_at", base: 7n, iteration: 3n }),
+    `evaluate(target2(prop_w), input: target_generated_at(target2(prop_w), seed: derive_seed(7, ${id}), iteration: 3))`);
 });
 
 test("dependency paths are relative", () => {
@@ -34,13 +38,13 @@ test("dependency paths are relative", () => {
   for (const m of toml.matchAll(/path = "([^"]+)"/g)) assert.ok(!/^([A-Za-z]:|\/)/.test(m[1]!), `absolute path ${m[1]}`);
 });
 
-test("integration: a generated harness runs through fe and decodes", () => {
+test("integration: a generated harness runs through fe and decodes", async () => {
   const root = resolve(import.meta.dirname, "../../../examples/vault-math");
   const d = discover(root);
   const t = d.targets.find((x) => x.name === "prop_withdraw_never_overdraws")!;
   const work = mkdtempSync(join(tmpdir(), "fuzzloom-"));
   const dir = writeHarness({ userRoot: root, ingot: d.ingot, target: t, call: { mode: "replay", input: [0n, 1n, 0n] }, workDir: work });
-  const r = runHarness(dir, "sonatina");
+  const r = await runHarness(dir, "sonatina");
   assert.deepEqual(r.outcome, { kind: "replayed", arity: 2, input: [0n, 1n, 0n], failed: true });
 });
 
@@ -54,6 +58,7 @@ test("every library function the harness generator calls is exported", () => {
     { mode: "check", base: 1n, runs: 1n }, { mode: "replay", input: [1n, 2n, 3n] },
     { mode: "input_at", base: 1n, iteration: 1n }, { mode: "digest", base: 1n, runs: 1n },
     { mode: "target_input_at", base: 1n, iteration: 1n }, { mode: "evaluate", input: [1n, 2n, 3n] },
+    { mode: "replay_at", base: 1n, iteration: 1n }, { mode: "evaluate_at", base: 1n, iteration: 1n },
   ];
   const used = new Set<string>();
   for (const arity of [1, 2, 3]) {
@@ -68,4 +73,29 @@ test("every library function the harness generator calls is exported", () => {
   }
   const missing = [...used].filter((n) => !exported.has(n));
   assert.deepEqual(missing, [], `not exported from lib.fe: ${missing.join(", ")}`);
+});
+
+test("integration: one batch harness answers every case by name, including the new modes", async () => {
+  const root = resolve(import.meta.dirname, "../../../examples/vault-math");
+  const d = discover(root);
+  const withdraw = d.targets.find((x) => x.name === "prop_withdraw_never_overdraws")!;
+  const price = d.targets.find((x) => x.name === "prop_share_price_defined")!;
+  const work = mkdtempSync(join(tmpdir(), "fuzzloom-"));
+  const cases: Case[] = [
+    { target: withdraw, call: { mode: "replay", input: [0n, 1n, 0n] } },
+    { target: withdraw, call: { mode: "replay", input: [5n, 1n, 0n] } },
+    { target: price, call: { mode: "replay", input: [0n, 0n, 0n] } },
+    { target: withdraw, call: { mode: "input_at", base: 7n, iteration: 3n } },
+    { target: withdraw, call: { mode: "replay_at", base: 7n, iteration: 3n } },
+  ];
+  const dir = writeBatch({ userRoot: root, ingot: d.ingot, cases, workDir: work, name: "batch" });
+  const r = await runBatch(dir, cases.map((_, i) => caseName(i)), "sonatina");
+  assert.deepEqual(r.outcomes[0], { kind: "replayed", arity: 2, input: [0n, 1n, 0n], failed: true });
+  assert.deepEqual(r.outcomes[1], { kind: "replayed", arity: 2, input: [5n, 1n, 0n], failed: false });
+  assert.deepEqual(r.outcomes[2], { kind: "panic", code: 18n, reason: "division or modulo by zero" });
+  // replay_at evaluates exactly the input input_at reports.
+  const g = r.outcomes[3]!, rep = r.outcomes[4]!;
+  assert.equal(g.kind, "generated");
+  assert.equal(rep.kind, "replayed");
+  if (g.kind === "generated" && rep.kind === "replayed") assert.deepEqual(rep.input, g.input);
 });

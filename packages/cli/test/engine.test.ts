@@ -1,32 +1,87 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
-import { shrinkByReplay } from "../src/engine.ts";
-import type { Target } from "../src/types.ts";
+import { chooseWidth, roundsFor, searchFirst, shrinkByReplay, shrinkCandidates } from "../src/engine.ts";
+import type { Target, Words } from "../src/types.ts";
 
 const t2: Target = { kind: "property", name: "p", args: [{ name: "a", type: "u64" }, { name: "b", type: "u64" }], file: "f", line: 1 };
 
-test("shrinks each argument to zero when the failure allows it", () => {
+/** Adapts a single-input predicate to the batched shape, counting rounds and replays. */
+function batched(pred: (w: Words) => boolean) {
+  const m = { rounds: 0, replays: 0 };
+  const f = async (ws: Words[]) => {
+    m.rounds++;
+    m.replays += ws.length;
+    return ws.map(pred);
+  };
+  return { f, m };
+}
+
+test("searchFirst finds the exact minimum within the stated round bound", async () => {
+  for (const width of [1, 2, 7, 21, 64]) {
+    for (const n of [1n, 2n, 9n, 100n, 10000n]) {
+      // Every answer position, sampled densely near the ends where off-by-one bugs live.
+      const answers = new Set<bigint>([1n, 2n, n / 2n, n - 1n, n].filter((a) => a >= 1n && a <= n));
+      for (let a = 1n; a <= n; a += n / 37n + 1n) answers.add(a);
+      for (const a of answers) {
+        let calls = 0;
+        const r = await searchFirst(1n, n, width, async (ks) => {
+          calls++;
+          assert.ok(ks.length <= width, `probe of ${ks.length} > width ${width}`);
+          assert.ok(ks.every((k) => k >= 1n && k < n), "probes only undecided values");
+          return ks.map((k) => k >= a);
+        });
+        assert.equal(r.value, a, `width ${width}, n ${n}, answer ${a}`);
+        assert.equal(r.rounds, calls);
+        assert.ok(r.rounds <= roundsFor(n - 1n, width), `width ${width}, n ${n}: ${r.rounds} rounds > bound ${roundsFor(n - 1n, width)}`);
+      }
+    }
+  }
+});
+
+test("roundsFor and chooseWidth: bisection is the width-1 case, and wider rounds cut fe runs", () => {
+  assert.equal(roundsFor(0n, 5), 0);
+  assert.equal(roundsFor(9999n, 1), 14); // ceil(log2(10000))
+  assert.equal(roundsFor(9999n, 21), 3);
+  const k = chooseWidth(9999n);
+  assert.ok(roundsFor(9999n, k) <= 4, `chosen width ${k} needs ${roundsFor(9999n, k)} rounds`);
+  assert.ok(k > 1 && k <= 64);
+  assert.equal(chooseWidth(3n), 3); // one round decides everything
+});
+
+test("shrinkCandidates: zero and power-of-two right shifts, deduplicated", () => {
+  const c = shrinkCandidates([1000n, 0n, 0n], 2);
+  // 1000 has 10 bits: shifts 1, 2, 4, 8.
+  assert.deepEqual(c.map((w) => w[0]), [0n, 500n, 250n, 62n, 3n]);
+  assert.deepEqual(shrinkCandidates([1n, 0n, 0n], 2).map((w) => w[0]), [0n]);
+  assert.deepEqual(shrinkCandidates([0n, 0n, 0n], 2), []);
+});
+
+test("shrinks each argument to zero when the failure allows it", async () => {
   // Aborts whenever b == 0 (like a division by b).
-  const r = shrinkByReplay(t2, [123456789n, 0n, 0n], 16, (w) => w[1] === 0n);
+  const { f, m } = batched((w) => w[1] === 0n);
+  const r = await shrinkByReplay(t2, [123456789n, 0n, 0n], 8, f);
   assert.deepEqual(r.input, [0n, 0n, 0n]);
   assert.equal(r.complete, true);
+  assert.equal(m.rounds, 1); // all zero after one round: no candidates remain, so no second fe run
 });
 
-test("halves toward a threshold and never accepts a non-reproducing candidate", () => {
-  const fails = (w: readonly bigint[]) => w[0]! >= 1000n;
-  const r = shrinkByReplay(t2, [1n << 40n, 7n, 0n], 64, fails);
+test("reaches the stated local minimum and never accepts a non-reproducing candidate", async () => {
+  const fails = (w: Words) => w[0]! >= 1000n && w[1] === 7n;
+  const { f } = batched(fails);
+  const r = await shrinkByReplay(t2, [1n << 40n, 7n, 0n], 64, f);
   assert.ok(fails(r.input));
-  assert.ok(r.input[0]! < 2000n, `halving should get below 2*threshold, got ${r.input[0]}`);
-  assert.equal(r.input[1], 0n);
+  assert.equal(r.complete, true);
+  // The guarantee, checked directly: no single move still reproduces.
+  for (const c of shrinkCandidates(r.input, 2)) assert.ok(!fails(c), `move to ${c} still reproduces`);
+  assert.ok(r.input[0]! < 2000n, `shift by 1 must get below 2*threshold, got ${r.input[0]}`);
+  assert.equal(r.input[1], 7n);
 });
 
-test("respects the replay budget", () => {
-  let calls = 0;
-  const r = shrinkByReplay(t2, [1n << 60n, 1n << 60n, 0n], 5, () => { calls++; return true; });
-  assert.equal(calls, 2); // both arguments go straight to zero
-  assert.deepEqual(r.input, [0n, 0n, 0n]);
-  let calls2 = 0;
-  const r2 = shrinkByReplay(t2, [1n << 60n, 0n, 0n], 3, (w) => { calls2++; return w[0]! > 5n; });
-  assert.equal(calls2, 3);
-  assert.equal(r2.complete, false);
+test("respects the round budget", async () => {
+  const { f, m } = batched((w) => w[0]! > 5n);
+  const r = await shrinkByReplay(t2, [1n << 200n, 0n, 0n], 2, f);
+  assert.equal(m.rounds, 2);
+  assert.equal(r.rounds, 2);
+  assert.equal(r.complete, false);
+  assert.ok(r.input[0]! < 1n << 200n);
 });

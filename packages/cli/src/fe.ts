@@ -4,7 +4,7 @@
 // timeout, backend unavailable, unparsed output). Infrastructure outcomes
 // are never reported as property failures or backend mismatches.
 
-import { spawnSync } from "node:child_process";
+import { spawn, spawnSync } from "node:child_process";
 import { existsSync } from "node:fs";
 import { homedir } from "node:os";
 import { join } from "node:path";
@@ -12,6 +12,7 @@ import { decodePayload } from "./abi.ts";
 import type { Backend, Outcome } from "./types.ts";
 
 export type FeRun = { outcome: Outcome; output: string; ms: number };
+export type BatchRun = { outcomes: Outcome[]; output: string; ms: number };
 
 /** Classifies the text `fe test` printed for a single-test harness. */
 export function parseFeOutput(text: string): Outcome {
@@ -33,6 +34,35 @@ export function parseFeOutput(text: string): Outcome {
     return { kind: "infra", reason: "unparsed", detail: "the harness test returned without a payload" };
   }
   return { kind: "infra", reason: "unparsed", detail: text.trim().split("\n").slice(0, 6).join("\n") };
+}
+
+const RESULT_LINE = /^(PASS|FAIL)\s+\[[^\]]*\]\s+(\S+)\s*$/gm;
+
+/**
+ * Classifies the output of a multi-test harness, one outcome per name in
+ * `names` (same order). fe prints a `PASS|FAIL [time] name` line per test,
+ * in completion order, followed by that test's payload or halt reason. When
+ * no test line appears at all (a compile error, an unsupported host), the
+ * whole output is classified once and applies to every case. A name with no
+ * line of its own is an infrastructure outcome, never a pass.
+ */
+export function parseBatchOutput(text: string, names: string[]): Outcome[] {
+  const marks = [...text.matchAll(RESULT_LINE)];
+  if (marks.length === 0) {
+    const whole = parseFeOutput(text);
+    return names.map(() => whole);
+  }
+  const blocks = new Map<string, string>();
+  marks.forEach((m, i) => {
+    const end = i + 1 < marks.length ? marks[i + 1]!.index : text.length;
+    blocks.set(m[2]!, text.slice(m.index, end).split(/\n\s*\ntest result:/)[0]!);
+  });
+  return names.map((n) => {
+    const b = blocks.get(n);
+    return b === undefined
+      ? { kind: "infra", reason: "unparsed", detail: `fe printed no result for ${n}` }
+      : parseFeOutput(b);
+  });
 }
 
 function firstLine(text: string, re: RegExp): string {
@@ -81,30 +111,57 @@ function toWslPath(cfg: FeConfig, p: string): string {
   return out;
 }
 
-/** Runs `fe test` on a harness ingot directory and classifies the result. */
-export function runHarness(dir: string, backend: Backend, cfg: FeConfig = defaultFeConfig()): FeRun {
+function capture(cmd: string, args: string[], timeoutMs: number): Promise<{ output: string; error?: string; timedOut: boolean }> {
+  return new Promise((done) => {
+    let output = "";
+    let timedOut = false;
+    let child: ReturnType<typeof spawn>;
+    try {
+      child = spawn(cmd, args, { stdio: ["ignore", "pipe", "pipe"] });
+    } catch (e) {
+      done({ output, error: String(e), timedOut });
+      return;
+    }
+    const timer = setTimeout(() => { timedOut = true; child.kill(); }, timeoutMs);
+    child.stdout!.on("data", (d) => { output += d; });
+    child.stderr!.on("data", (d) => { output += d; });
+    child.on("error", (e: NodeJS.ErrnoException) => { clearTimeout(timer); done({ output, error: `${e.code ?? ""} ${e.message}`.trim(), timedOut }); });
+    child.on("close", () => { clearTimeout(timer); done({ output, timedOut }); });
+  });
+}
+
+/**
+ * Runs `fe test` on a harness ingot and classifies one outcome per case
+ * name. Asynchronous, so the two backends of a differential round can run
+ * at the same time.
+ */
+export async function runBatch(dir: string, names: string[], backend: Backend, cfg: FeConfig = defaultFeConfig()): Promise<BatchRun> {
   const start = Date.now();
   const feArgs = ["test", "--color", "never", ...(backend === "native" ? ["--backend", "native"] : [])];
-  let r: ReturnType<typeof spawnSync>;
+  const all = (o: Outcome): BatchRun => ({ outcomes: names.map(() => o), output: "", ms: Date.now() - start });
+  let r: Awaited<ReturnType<typeof capture>>;
   try {
     if (viaWsl(backend)) {
       const wdir = toWslPath(cfg, dir);
       const quoted = [cfg.wslBin, ...feArgs, `'${wdir}'`].join(" ");
-      r = wsl(cfg, ["bash", "-lc", quoted]);
+      const pre = cfg.wslDistro ? ["-d", cfg.wslDistro] : [];
+      r = await capture("wsl", [...pre, "--", "bash", "-lc", quoted], cfg.timeoutMs);
     } else {
-      r = spawnSync(cfg.bin, [...feArgs, dir], { encoding: "utf8", timeout: cfg.timeoutMs });
+      r = await capture(cfg.bin, [...feArgs, dir], cfg.timeoutMs);
     }
   } catch (e) {
-    return { outcome: { kind: "infra", reason: "backend-unavailable", detail: String(e) }, output: "", ms: Date.now() - start };
+    return all({ kind: "infra", reason: "backend-unavailable", detail: String(e) });
   }
   const ms = Date.now() - start;
-  const output = String(r.stdout ?? "") + String(r.stderr ?? "");
-  if (r.error) {
-    const err = r.error as NodeJS.ErrnoException;
-    if (err.code === "ETIMEDOUT") return { outcome: { kind: "infra", reason: "timeout", detail: `no result within ${cfg.timeoutMs} ms` }, output, ms };
-    return { outcome: { kind: "infra", reason: "backend-unavailable", detail: `${err.code ?? ""} ${err.message}`.trim() }, output, ms };
-  }
-  return { outcome: parseFeOutput(output), output, ms };
+  if (r.timedOut) return { ...all({ kind: "infra", reason: "timeout", detail: `no result within ${cfg.timeoutMs} ms` }), output: r.output, ms };
+  if (r.error) return { ...all({ kind: "infra", reason: "backend-unavailable", detail: r.error }), output: r.output, ms };
+  return { outcomes: parseBatchOutput(r.output, names), output: r.output, ms };
+}
+
+/** Runs a one-case harness (see writeHarness). */
+export async function runHarness(dir: string, backend: Backend, cfg: FeConfig = defaultFeConfig()): Promise<FeRun> {
+  const r = await runBatch(dir, ["case_0"], backend, cfg);
+  return { outcome: r.outcomes[0]!, output: r.output, ms: r.ms };
 }
 
 /** The fe version string, e.g. "fe 26.6.0 (5b3f96a)". */

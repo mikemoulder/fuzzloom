@@ -6,7 +6,8 @@ import { randomBytes } from "node:crypto";
 import { resolve } from "node:path";
 import { discover } from "./discover.ts";
 import { defaultFeConfig, feVersion } from "./fe.ts";
-import { call, describeAbort, runDiff, runProperty, type Context, type DiffResult, type PropertyResult } from "./engine.ts";
+import { describeAbort, runCases, runDiffs, runProperties, type Context, type DiffResult, type PropertyResult } from "./engine.ts";
+import type { Case } from "./harness.ts";
 import { listRecords, loadRecord, makeRecord, recordWords, saveRecord, type FailureRecord } from "./store.ts";
 import { bold, dim, formatResult, green, red, toJson, values, yellow } from "./report.ts";
 import { wordToValue } from "./abi.ts";
@@ -34,7 +35,7 @@ Exit codes: 0 all passed, 1 a property failed or aborted, 2 infrastructure error
 
 type Opts = { seed?: string; runs?: string; backend: string; only?: string; json: boolean };
 
-function main(argv: string[]): number {
+async function main(argv: string[]): Promise<number> {
   const { values: v, positionals } = parseArgs({
     args: argv,
     allowPositionals: true,
@@ -86,7 +87,7 @@ function list(root: string, opts: Opts): number {
   return 0;
 }
 
-function fuzz(root: string, opts: Opts): number {
+async function fuzz(root: string, opts: Opts): Promise<number> {
   const d = discover(root);
   const base = baseSeed(opts);
   const runs = BigInt(opts.runs ?? "10000");
@@ -102,9 +103,10 @@ function fuzz(root: string, opts: Opts): number {
     console.log(`${bold("fuzzloom fuzz")} ${d.ingot}  ${dim(`seed ${base}, ${runs} runs, ${backend}, ${version}`)}`);
     for (const s of d.skipped) console.log(`${yellow("SKIP")}  ${s.name}  ${dim(`${s.file}:${s.line}`)}  ${s.reason}`);
   }
+  const started = Date.now();
   const results: { result: PropertyResult; record?: string }[] = [];
-  for (const t of targets) {
-    const r = runProperty(ctx, t, base, runs);
+  for (const r of await runProperties(ctx, targets, base, runs)) {
+    const t = r.target;
     let id: string | undefined;
     if (r.status === "failed" || r.status === "aborted") {
       const rec = makeRecord({
@@ -125,9 +127,13 @@ function fuzz(root: string, opts: Opts): number {
   if (opts.json) {
     console.log(JSON.stringify(toJson({ ingot: d.ingot, seed: base, runs, backend, fe_version: version, skipped: d.skipped, results }), null, 2));
   } else {
-    console.log(`\n${passed} passed, ${failed} failed, ${infra} infrastructure errors  ${dim(`(repeat with --seed ${base})`)}`);
+    console.log(`\n${passed} passed, ${failed} failed, ${infra} infrastructure errors in ${seconds(started)}  ${dim(`(repeat with --seed ${base})`)}`);
   }
   return infra > 0 ? 2 : failed > 0 ? 1 : 0;
+}
+
+function seconds(since: number): string {
+  return `${((Date.now() - since) / 1000).toFixed(1)} s`;
 }
 
 function baseSeed(opts: Opts): bigint {
@@ -138,7 +144,7 @@ function progress(opts: Opts): Context["onRun"] {
   return opts.json ? undefined : (what, ms) => process.stderr.write(dim(`  .. ${what} (${ms} ms)\n`));
 }
 
-function diff(root: string, opts: Opts): number {
+async function diff(root: string, opts: Opts): Promise<number> {
   const d = discover(root);
   const base = baseSeed(opts);
   const runs = BigInt(opts.runs ?? "100000");
@@ -147,9 +153,10 @@ function diff(root: string, opts: Opts): number {
   const targets = d.targets.filter((t) => t.kind === "differential" && (!opts.only || t.name.includes(opts.only)));
   const ctx: Context = { userRoot: root, ingot: d.ingot, backend: "sonatina", fe, onRun: progress(opts) };
   if (!opts.json) console.log(`${bold("fuzzloom diff")} ${d.ingot}  ${dim(`seed ${base}, ${runs} inputs per target, sonatina vs native, ${version}`)}`);
+  const started = Date.now();
   const results: { result: DiffResult; record?: string }[] = [];
-  for (const t of targets) {
-    const r = runDiff(ctx, t, base, runs);
+  for (const r of await runDiffs(ctx, targets, base, runs)) {
+    const t = r.target;
     let id: string | undefined;
     if (r.status === "diverged") {
       const rec = makeRecord({
@@ -165,7 +172,7 @@ function diff(root: string, opts: Opts): number {
   const diverged = results.filter((x) => x.result.status === "diverged").length;
   const infra = results.filter((x) => x.result.status === "infra").length;
   if (opts.json) console.log(JSON.stringify(toJson({ ingot: d.ingot, seed: base, runs, fe_version: version, results }), null, 2));
-  else console.log(`\n${results.length - diverged - infra} agreed, ${diverged} diverged, ${infra} infrastructure errors  ${dim(`(repeat with --seed ${base})`)}`);
+  else console.log(`\n${results.length - diverged - infra} agreed, ${diverged} diverged, ${infra} infrastructure errors in ${seconds(started)}  ${dim(`(repeat with --seed ${base})`)}`);
   return infra > 0 ? 2 : diverged > 0 ? 1 : 0;
 }
 
@@ -177,7 +184,7 @@ function formatDiff(r: DiffResult, id?: string): string[] {
       return [`${green("AGREE")} ${sig}  ${dim(`${r.runs} inputs, identical digests on sonatina and native`)}`];
     case "diverged":
       return [
-        `${red("DIVERGE")} ${sig}  ${dim(`first at input ${r.iteration + 1n}, found by bisection in ${r.feRuns} fe runs`)}`,
+        `${red("DIVERGE")} ${sig}  ${dim(`first at input ${r.iteration + 1n}, found in ${r.rounds} search rounds, ${r.feRuns} fe runs in total`)}`,
         ...values(t, r.input).map((l) => `      ${bold(l)}`),
         `      sonatina returns ${bold(String(wordToValue(r.outputs.sonatina, t.returns!)))}`,
         `      native   returns ${bold(String(wordToValue(r.outputs.native, t.returns!)))}`,
@@ -190,35 +197,63 @@ function formatDiff(r: DiffResult, id?: string): string[] {
 
 type Verdict = { reproduces: boolean | undefined; text: string };
 
-/** Replays one record. `reproduces` is undefined on an infrastructure outcome. */
-function check(ctx: Context, d: Discovery, rec: FailureRecord): Verdict {
-  const t: Target | undefined = d.targets.find((x) => x.name === rec.target);
-  if (!t) return { reproduces: undefined, text: `${rec.target} no longer exists in ${d.ingot}` };
-  if (t.args.length !== rec.args.length || t.args.some((a, i) => a.type !== rec.args[i]!.type)) {
-    return { reproduces: undefined, text: `${rec.target} changed signature since the failure was recorded` };
+/**
+ * Replays saved records in at most one round per backend, run concurrently.
+ * `reproduces` is undefined on an infrastructure outcome.
+ */
+async function verdicts(ctx: Context, d: Discovery, records: FailureRecord[]): Promise<Verdict[]> {
+  const out: Verdict[] = [];
+  const cases: Record<Backend, Case[]> = { sonatina: [], native: [] };
+  const slot: { s?: number; n?: number; t?: Target }[] = [];
+  for (const [i, rec] of records.entries()) {
+    slot.push({});
+    const t: Target | undefined = d.targets.find((x) => x.name === rec.target);
+    if (!t) {
+      out[i] = { reproduces: undefined, text: `${rec.target} no longer exists in ${d.ingot}` };
+      continue;
+    }
+    if (t.args.length !== rec.args.length || t.args.some((a, j) => a.type !== rec.args[j]!.type)) {
+      out[i] = { reproduces: undefined, text: `${rec.target} changed signature since the failure was recorded` };
+      continue;
+    }
+    const input = recordWords(rec);
+    slot[i]!.t = t;
+    if (rec.kind === "differential") {
+      slot[i]!.s = cases.sonatina.push({ target: t, call: { mode: "evaluate", input } }) - 1;
+      slot[i]!.n = cases.native.push({ target: t, call: { mode: "evaluate", input } }) - 1;
+    } else if (rec.backend === "native") {
+      slot[i]!.n = cases.native.push({ target: t, call: { mode: "replay", input } }) - 1;
+    } else {
+      slot[i]!.s = cases.sonatina.push({ target: t, call: { mode: "replay", input } }) - 1;
+    }
   }
-  const w = recordWords(rec);
+  const round = (b: Backend) => (cases[b].length ? runCases(ctx, cases[b], "replay", b) : Promise.resolve([]));
+  const [so, no] = await Promise.all([round("sonatina"), round("native")]);
   const infraText = (o: Outcome) => (o.kind === "infra" ? `${o.reason}: ${o.detail.split("\n")[0]}` : `unexpected ${o.kind}`);
-  if (rec.kind === "differential") {
-    const s = call({ ...ctx, backend: "sonatina" }, t, { mode: "evaluate", input: w }).outcome;
-    const n = call({ ...ctx, backend: "native" }, t, { mode: "evaluate", input: w }).outcome;
-    if (s.kind !== "evaluated") return { reproduces: undefined, text: infraText(s) };
-    if (n.kind !== "evaluated") return { reproduces: undefined, text: infraText(n) };
-    const sv = wordToValue(s.output, t.returns!), nv = wordToValue(n.output, t.returns!);
-    return s.output !== n.output
-      ? { reproduces: true, text: `still diverges: sonatina ${sv}, native ${nv}` }
-      : { reproduces: false, text: `backends now agree (${sv})` };
+  for (const [i, rec] of records.entries()) {
+    const { s: si, n: ni, t } = slot[i]!;
+    if (!t) continue;
+    if (rec.kind === "differential") {
+      const s = so[si!]!, n = no[ni!]!;
+      if (s.kind !== "evaluated") { out[i] = { reproduces: undefined, text: infraText(s) }; continue; }
+      if (n.kind !== "evaluated") { out[i] = { reproduces: undefined, text: infraText(n) }; continue; }
+      const sv = wordToValue(s.output, t.returns!), nv = wordToValue(n.output, t.returns!);
+      out[i] = s.output !== n.output
+        ? { reproduces: true, text: `still diverges: sonatina ${sv}, native ${nv}` }
+        : { reproduces: false, text: `backends now agree (${sv})` };
+      continue;
+    }
+    const o = si !== undefined ? so[si]! : no[ni!]!;
+    if (o.kind === "replayed") {
+      out[i] = o.failed ? { reproduces: true, text: "still fails" } : { reproduces: false, text: "now passes" };
+    } else if (o.kind === "panic" || o.kind === "revert") {
+      const same = rec.kind === "abort" && rec.detail === describeAbort(o);
+      out[i] = { reproduces: true, text: same ? `still aborts: ${describeAbort(o)}` : `aborts differently: ${describeAbort(o)}` };
+    } else {
+      out[i] = { reproduces: undefined, text: infraText(o) };
+    }
   }
-  const backend: Backend = rec.backend === "native" ? "native" : "sonatina";
-  const o = call({ ...ctx, backend }, t, { mode: "replay", input: w }).outcome;
-  if (o.kind === "replayed") {
-    return o.failed ? { reproduces: true, text: "still fails" } : { reproduces: false, text: "now passes" };
-  }
-  if (o.kind === "panic" || o.kind === "revert") {
-    const same = rec.kind === "abort" && rec.detail === describeAbort(o);
-    return { reproduces: true, text: same ? `still aborts: ${describeAbort(o)}` : `aborts differently: ${describeAbort(o)}` };
-  }
-  return { reproduces: undefined, text: infraText(o) };
+  return out;
 }
 
 function applyVerdict(root: string, rec: FailureRecord, v: Verdict): string {
@@ -229,23 +264,23 @@ function applyVerdict(root: string, rec: FailureRecord, v: Verdict): string {
   return v.reproduces ? red("FAILS") : green("FIXED");
 }
 
-function reproduce(root: string, id: string, opts: Opts): number {
+async function reproduce(root: string, id: string, opts: Opts): Promise<number> {
   const d = discover(root);
   const rec = loadRecord(root, id);
   const ctx: Context = { userRoot: root, ingot: d.ingot, backend: "sonatina", fe: defaultFeConfig(), onRun: progress(opts) };
   const target = d.targets.find((x) => x.name === rec.target);
-  const v = check(ctx, d, rec);
-  const label = applyVerdict(root, rec, v);
+  const [v] = await verdicts(ctx, d, [rec]);
+  const label = applyVerdict(root, rec, v!);
   if (opts.json) {
-    console.log(JSON.stringify(toJson({ id, reproduces: v.reproduces, text: v.text, record: rec }), null, 2));
+    console.log(JSON.stringify(toJson({ id, reproduces: v!.reproduces, text: v!.text, record: rec }), null, 2));
   } else {
-    console.log(`${label}  ${rec.id}  ${v.text}`);
+    console.log(`${label}  ${rec.id}  ${v!.text}`);
     if (target) for (const l of values(target, recordWords(rec))) console.log(`      ${l}`);
   }
-  return v.reproduces === undefined ? 2 : v.reproduces ? 1 : 0;
+  return v!.reproduces === undefined ? 2 : v!.reproduces ? 1 : 0;
 }
 
-function replayAll(root: string, opts: Opts): number {
+async function replayAll(root: string, opts: Opts): Promise<number> {
   const d = discover(root);
   const records = listRecords(root);
   const ctx: Context = { userRoot: root, ingot: d.ingot, backend: "sonatina", fe: defaultFeConfig(), onRun: progress(opts) };
@@ -253,8 +288,9 @@ function replayAll(root: string, opts: Opts): number {
   let failing = 0;
   let infra = 0;
   const out: unknown[] = [];
-  for (const rec of records) {
-    const v = check(ctx, d, rec);
+  const vs = await verdicts(ctx, d, records);
+  for (const [i, rec] of records.entries()) {
+    const v = vs[i]!;
     const label = applyVerdict(root, rec, v);
     if (v.reproduces === undefined) infra++;
     else if (v.reproduces) failing++;
@@ -267,7 +303,7 @@ function replayAll(root: string, opts: Opts): number {
 }
 
 try {
-  process.exitCode = main(process.argv.slice(2));
+  process.exitCode = await main(process.argv.slice(2));
 } catch (e) {
   console.error(`fuzzloom: ${(e as Error).message}`);
   process.exitCode = 2;

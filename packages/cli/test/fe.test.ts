@@ -1,7 +1,7 @@
 // parseFeOutput against fe test output recorded from real runs (fe 26.6.0).
 import { test } from "node:test";
 import assert from "node:assert/strict";
-import { parseFeOutput } from "../src/fe.ts";
+import { parseBatchOutput, parseFeOutput } from "../src/fe.ts";
 
 const PANIC_NATIVE = `FAIL  [0.0018s] h
     Test reverted: 0x4e487b710000000000000000000000000000000000000000000000000000000000000012
@@ -71,4 +71,34 @@ test("an unsupported native host is reported as such", () => {
 test("a harness that returns without a payload is not a pass", () => {
   const o = parseFeOutput("PASS  [0.0003s] h\n\ntest result: ok. 1 passed; 0 failed");
   assert.equal(o.kind === "infra" && o.reason, "unparsed");
+});
+
+// Recorded from a four-test vault-math harness on sonatina (completion order, not case order).
+const BATCH = `PASS  [0.0008s] case_3
+FAIL  [0.0010s] case_0
+    Test reverted: 0x4e487b710000000000000000000000000000000000000000000000000000000000000012
+FAIL  [0.0062s] case_2
+    Test reverted: 0xdeadbeef
+FAIL  [5.1168s] case_1
+    Test halted: OutOfGas(Basic) (gas: 1000000000)
+
+test result: FAILED. 1 passed; 3 failed
+
+failures:
+    case_0
+    case_2
+    case_1`;
+
+test("batch output is split per test name, whatever the completion order", () => {
+  const o = parseBatchOutput(BATCH, ["case_0", "case_1", "case_2", "case_3", "case_4"]);
+  assert.deepEqual(o[0], { kind: "panic", code: 18n, reason: "division or modulo by zero" });
+  assert.equal(o[1]!.kind === "infra" && o[1]!.reason, "out-of-gas"); // only this case, not its neighbours
+  assert.equal(o[2]!.kind === "infra" && o[2]!.reason, "unparsed"); // unknown selector
+  assert.equal(o[3]!.kind === "infra" && o[3]!.reason, "unparsed"); // returned without a payload
+  assert.equal(o[4]!.kind === "infra" && o[4]!.reason, "unparsed"); // no line at all: never a pass
+});
+
+test("batch output with a compile error applies it to every case", () => {
+  const o = parseBatchOutput(COMPILE, ["case_0", "case_1"]);
+  assert.ok(o.every((x) => x.kind === "infra" && x.reason === "compile"));
 });
