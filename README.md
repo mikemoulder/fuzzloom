@@ -173,14 +173,21 @@ ok    Native backend    fe 26.6.0 (5b3f96a) in WSL
 ok    Project           ingot token_ledger: 4 prop_* and 1 diff_* functions, 0 skipped
 ```
 
-To work from source instead:
+### Build and test from source
 
 ```bash
 git clone https://github.com/MikeMoulder/fuzzloom && cd fuzzloom
-npm ci
-node packages/cli/src/index.ts fuzz examples/vault-math --seed 7
-bash scripts/ci.sh          # the whole pipeline: Fe tests on both backends, CLI tests, both demos
+npm ci                          # dev dependencies only (TypeScript, @types/node); the CLI has no runtime dependencies
+fe check                        # build: the Fe library and the three examples compile
+fe test                         # 94 Fe tests on sonatina, the EVM backend
+fe test --backend native        # the same 94 tests on the native backend (Linux, macOS, or WSL on Windows)
+npm run typecheck               # the CLI's TypeScript
+npm test                        # 79 CLI tests, including integration runs through real fe on both backends
+node packages/cli/src/index.ts fuzz examples/vault-math --seed 7    # a demo: 3 passed, 4 failed (the planted bugs)
+bash scripts/ci.sh              # all of the above plus formatting, packaging and the three seeded demos, as CI runs it
 ```
+
+`fe check` prints nothing when everything compiles. Use it, not `fe build`, to build this repository: `fe build` compiles contracts, and Fuzzloom is a library and a CLI with none, so it stops with "Error: No contracts found to build" and exit code 1. Node 22.18 runs the CLI's TypeScript directly, so the CLI has no compile step.
 
 ## Writing properties
 
@@ -367,7 +374,7 @@ Two Fe-specific limits shape campaign sizes. `fe test` caps each EVM test at 10^
 | CLI | **79 tests** | Discovery (effects, fixtures, ranges, modules), saved-failure validation and symlink refusal (each replaying a security-audit exploit), harness generation for every mode, payload decoding, output parsing from real `fe` output, the k-ary search bound swept over every answer position, both replay shrinkers, JUnit, doctor, and integration tests that run real `fe` on both backends |
 | Pipeline | [`scripts/ci.sh`](scripts/ci.sh) | Installs Fe, checks formatting, runs both suites, packs the npm package and runs it outside the repo, then asserts that all three examples reproduce their documented seed-7 results |
 
-CI runs `scripts/ci.sh` on CircleCI, and the same script runs locally:
+The commands for each suite are in [Build and test from source](#build-and-test-from-source). CI runs `scripts/ci.sh` on CircleCI, and the same script runs locally:
 
 ```bash
 bash scripts/ci.sh

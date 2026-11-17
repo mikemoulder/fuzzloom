@@ -21,7 +21,7 @@ fe test --color never                       # every Fe test (library and example
 fe test --backend native --color never      # the same on native (Linux/macOS)
 bash scripts/test-both.sh                   # both backends; uses WSL for native on Windows
 npm run typecheck && npm test               # the CLI: unit tests and integration tests through real fe
-bash scripts/ci.sh                          # everything CI runs, including packaging and both demos
+bash scripts/ci.sh                          # everything CI runs, including packaging and the three seeded demos
 ```
 
 A change to the Fe library is verified on **both** backends before it is merged. A change to an example must keep its documented seed-7 results, which `scripts/ci.sh` asserts, or update the example's README and the assertion together.
