@@ -6,14 +6,14 @@ import { randomBytes } from "node:crypto";
 import { resolve } from "node:path";
 import { discover } from "./discover.ts";
 import { defaultFeConfig, feVersion } from "./fe.ts";
-import { describeAbort, runCases, runDiffs, runProperties, type Context, type DiffResult, type PropertyResult, type Seed } from "./engine.ts";
+import { describeAbort, runCases, runDiffs, runProperties, workDir, type Context, type DiffResult, type PropertyResult, type Seed } from "./engine.ts";
 import type { Case } from "./harness.ts";
 import { listRecords, loadRecord, makeRecord, recordWords, saveRecord, type FailureRecord } from "./store.ts";
 import { bold, dim, formatResult, green, red, toJson, values, yellow } from "./report.ts";
 import { wordToValue } from "./abi.ts";
 import { checks } from "./doctor.ts";
 import { junitXml, type JUnitCase, type JUnitOutcome } from "./junit.ts";
-import { existsSync, writeFileSync } from "node:fs";
+import { existsSync, rmSync, writeFileSync } from "node:fs";
 import type { Discovery } from "./discover.ts";
 import type { Backend, Outcome, Target } from "./types.ts";
 
@@ -70,18 +70,35 @@ async function main(argv: string[]): Promise<number> {
   switch (command) {
     case "doctor": return doctor(positionals[1] ? pathArg(1) : undefined, opts);
     case "list": return list(pathArg(1), opts);
-    case "fuzz": return fuzz(pathArg(1), opts);
-    case "diff": return diff(pathArg(1), opts);
-    case "replay": return replayAll(pathArg(1), opts);
+    case "fuzz": return scratch(pathArg(1), opts, fuzz(pathArg(1), opts));
+    case "diff": return scratch(pathArg(1), opts, diff(pathArg(1), opts));
+    case "replay": return scratch(pathArg(1), opts, replayAll(pathArg(1), opts));
     case "reproduce": {
       const id = positionals[1];
       if (!id) throw new Error("reproduce needs a failure id (see .fuzzloom/failures/)");
-      return reproduce(pathArg(2), id, opts);
+      return scratch(pathArg(2), opts, reproduce(pathArg(2), id, opts));
     }
     default:
       console.error(`unknown command ${command}\n\n${USAGE}`);
       return 2;
   }
+}
+
+/**
+ * Removes the generated harnesses under .fuzzloom/tmp once a command is
+ * done, so they never show up in the user's own `fe fmt --check` or
+ * `fe test`. They are kept after an infrastructure error (exit 2), where the
+ * generated code is what you need to debug it.
+ */
+async function scratch(root: string, opts: Opts, run: Promise<number>): Promise<number> {
+  const code = await run;
+  const dir = workDir(root);
+  if (code === 2) {
+    if (existsSync(dir) && !opts.json) console.error(dim(`generated harnesses kept for debugging in ${dir}`));
+  } else {
+    rmSync(dir, { recursive: true, force: true });
+  }
+  return code;
 }
 
 function doctor(root: string | undefined, opts: Opts): number {
