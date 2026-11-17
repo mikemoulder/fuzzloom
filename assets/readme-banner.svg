@@ -1,0 +1,37 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="1280" height="420" viewBox="0 0 1280 420" role="img" aria-labelledby="t d">
+  <title id="t">Fuzzloom</title>
+  <desc id="d">Fuzzloom: property-based testing, fuzzing and EVM/native differential testing for Fe. vault-math, seed 7: 4 of 4 planted bugs found and shrunk. First sonatina/native divergence pinned in 8 single-test fe runs. 92 Fe tests pass on both backends.</desc>
+  <defs>
+    <pattern id="weave" width="24" height="24" patternUnits="userSpaceOnUse">
+      <path d="M0 12h24M12 0v24" stroke="#1c2230" stroke-width="1"/>
+    </pattern>
+    <linearGradient id="fade" x1="0" x2="1" y1="0" y2="0">
+      <stop offset="0" stop-color="#0b0d12" stop-opacity="1"/>
+      <stop offset="0.55" stop-color="#0b0d12" stop-opacity="0.9"/>
+      <stop offset="1" stop-color="#0b0d12" stop-opacity="0.2"/>
+    </linearGradient>
+  </defs>
+  <rect width="1280" height="420" fill="#0b0d12"/>
+  <rect width="1280" height="420" fill="url(#weave)"/>
+  <rect width="1280" height="420" fill="url(#fade)"/>
+
+  <!-- two threads (sonatina, native) running together, then splitting at one input -->
+  <g fill="none" stroke-width="3" stroke-linecap="round">
+    <path d="M760 150 C 880 150, 940 150, 1040 150 S 1150 150, 1240 118" stroke="#e8ff5a"/>
+    <path d="M760 162 C 880 162, 940 162, 1040 162 S 1150 162, 1240 196" stroke="#5ad1ff"/>
+  </g>
+  <circle cx="1040" cy="156" r="7" fill="#0b0d12" stroke="#ffffff" stroke-width="2"/>
+  <text x="1040" y="226" fill="#8b93a7" font-family="ui-monospace, SFMono-Regular, Menlo, Consolas, monospace" font-size="15" text-anchor="middle">input 269</text>
+  <text x="1244" y="110" fill="#e8ff5a" font-family="ui-monospace, SFMono-Regular, Menlo, Consolas, monospace" font-size="14" text-anchor="end">sonatina …699</text>
+  <text x="1244" y="218" fill="#5ad1ff" font-family="ui-monospace, SFMono-Regular, Menlo, Consolas, monospace" font-size="14" text-anchor="end">native …700</text>
+
+  <text x="72" y="140" fill="#ffffff" font-family="Inter, Segoe UI, Helvetica, Arial, sans-serif" font-size="76" font-weight="700" letter-spacing="-2">Fuzzloom</text>
+  <text x="74" y="188" fill="#c9cfdb" font-family="Inter, Segoe UI, Helvetica, Arial, sans-serif" font-size="26">Property-based testing, fuzzing and</text>
+  <text x="74" y="222" fill="#c9cfdb" font-family="Inter, Segoe UI, Helvetica, Arial, sans-serif" font-size="26">EVM/native differential testing for Fe</text>
+
+  <g font-family="ui-monospace, SFMono-Regular, Menlo, Consolas, monospace" font-size="17" fill="#8b93a7">
+    <text x="74" y="300"><tspan fill="#e8ff5a">4 / 4</tspan>  planted bugs found and shrunk (vault-math, seed 7)</text>
+    <text x="74" y="332"><tspan fill="#5ad1ff">8</tspan>      single-test fe runs to pin the first backend divergence</text>
+    <text x="74" y="364"><tspan fill="#ffffff">92</tspan>     Fe tests passing on sonatina and on native</text>
+  </g>
+</svg>
