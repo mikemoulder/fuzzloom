@@ -195,8 +195,22 @@ uses T::E
 pub fn digest_checkpoints<T: Target>(_ t: T, seed: u64, first: u64, step: u64, count: u64) -> !
 uses T::E
 {
+    digest_checkpoints_within(t, bounds: T::full_bounds(), seed, first, step, count)
+}
+
+/// Harness entry point: `digest_checkpoints` over inputs drawn within `bounds`.
+pub fn digest_checkpoints_within<T: Target>(
+    _ t: T,
+    bounds: Bounds,
+    seed: u64,
+    first: u64,
+    step: u64,
+    count: u64,
+) -> !
+uses T::E
+{
     assert!(count <= MAX_CHECKPOINTS)
-    let accs = checkpoints_of(t, seed, first, step, count)
+    let accs = checkpoints_within(t, bounds, seed, first, step, count)
     revert_error(
         Checkpoints { seed, first, step, arity: T::arity(), accs: DynArray::from_mem_vec(accs) },
     )
@@ -204,8 +218,19 @@ uses T::E
 
 /// Harness entry point: the input the digest of `t` draws at `iteration`.
 pub fn target_input_at<T: Target>(_ t: T, seed: u64, iteration: u64) -> ! {
+    target_input_at_within(t, bounds: T::full_bounds(), seed, iteration)
+}
+
+/// The full bounds of `t`'s argument types, as a value (an associated
+/// function call on a generic type cannot appear in a harness expression).
+pub fn target_bounds_of<T: Target>(_ t: T) -> Bounds {
+    T::full_bounds()
+}
+
+/// Harness entry point: the input a digest within `bounds` draws at `iteration`.
+pub fn target_input_at_within<T: Target>(_ t: T, bounds: Bounds, seed: u64, iteration: u64) -> ! {
     let arity = T::arity()
-    let x = generated_at(T::full_bounds(), arity, seed, iteration)
+    let x = generated_at(bounds, arity, seed, iteration)
     revert_error(
         Generated { seed, iteration, arity, input0: x.w0, input1: x.w1, input2: x.w2 },
     )
@@ -369,4 +394,11 @@ fn zero_step_and_zero_count_are_well_defined() {
     assert!(
         checkpoints_payload(t, seed: 2, first: 9, step: 4, count: 0).len() == 0,
     )
+}
+
+#[test]
+fn target_bounds_of_is_the_full_type_range() {
+    let b = target_bounds_of(target2(|x: u8, y: i16| (x as i16) + y))
+    assert!(b.lo.same(Input::zero()))
+    assert!(b.hi.w0 == 0xff && b.hi.w1 == 0xffff && b.hi.w2 == 0)
 }

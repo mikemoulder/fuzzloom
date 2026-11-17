@@ -33,7 +33,9 @@ pub use mutate::{
     clamp_input,
     find_mutating,
     check_mutating,
+    check_mutating_within,
     mutant_at,
+    mutant_at_within,
     MAX_STACK,
 }
 pub use diff::{
@@ -50,6 +52,9 @@ pub use diff::{
     digest,
     checkpoints_of,
     digest_checkpoints,
+    digest_checkpoints_within,
+    target_bounds_of,
+    target_input_at_within,
     MAX_CHECKPOINTS,
     target_input_at,
     target_generated_at,

@@ -180,22 +180,41 @@ uses P::E
 pub fn check_mutating<P: Property>(_ p: P, corpus: Input, seed: u64, runs: u64) -> !
 uses P::E
 {
+    check_mutating_within(p, bounds: bounds_of(p), corpus, seed, runs)
+}
+
+/// Harness entry point: a mutation campaign around `corpus` within
+/// `bounds`, shrinking toward `bounds.lo`.
+pub fn check_mutating_within<P: Property>(
+    _ p: P,
+    bounds: Bounds,
+    corpus: Input,
+    seed: u64,
+    runs: u64,
+) -> !
+uses P::E
+{
     conclude(
-        find_mutating(
-            p,
-            bounds: bounds_of(p),
-            corpus,
-            seed,
-            runs,
-            budget: SHRINK_BUDGET,
-        ),
+        find_mutating(p, bounds, corpus, seed, runs, budget: SHRINK_BUDGET),
     )
 }
 
 /// Harness entry point: the mutant at `iteration`. Evaluates nothing.
 pub fn mutant_at<P: Property>(_ p: P, corpus: Input, seed: u64, iteration: u64) -> ! {
+    mutant_at_within(p, bounds: bounds_of(p), corpus, seed, iteration)
+}
+
+/// Harness entry point: the mutant at `iteration` of a campaign within
+/// `bounds`. Evaluates nothing.
+pub fn mutant_at_within<P: Property>(
+    _ p: P,
+    bounds: Bounds,
+    corpus: Input,
+    seed: u64,
+    iteration: u64,
+) -> ! {
     let arity = P::arity()
-    let x = mutated_at(bounds_of(p), arity, corpus, seed, iteration)
+    let x = mutated_at(bounds, arity, corpus, seed, iteration)
     revert_error(
         Generated { seed, iteration, arity, input0: x.w0, input1: x.w1, input2: x.w2 },
     )
