@@ -40,4 +40,4 @@ pub fn fixture_policy() -> FeePolicy { FeePolicy { bps: 25, min_fee: 5 } }
 
 Fuzzing finds bugs. It does not prove their absence.
 
-Source, examples and documentation: https://github.com/MikeMoulder/fuzzloom (Apache-2.0).
+Documentation: https://fuzzloom.pages.dev/docs/ · Source and examples: https://github.com/MikeMoulder/fuzzloom (Apache-2.0).

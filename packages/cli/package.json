@@ -37,5 +37,9 @@
     "property-based-testing",
     "differential-testing",
     "evm"
-  ]
+  ],
+  "homepage": "https://fuzzloom.pages.dev",
+  "bugs": {
+    "url": "https://github.com/MikeMoulder/fuzzloom/issues"
+  }
 }

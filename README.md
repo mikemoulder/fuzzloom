@@ -14,7 +14,9 @@
 </p>
 
 <p align="center">
-  <a href="docs/guide.md"><b>Guide</b></a> ·
+  <a href="https://fuzzloom.pages.dev"><b>Website</b></a> ·
+  <a href="https://fuzzloom.pages.dev/docs/">Docs</a> ·
+  <a href="docs/guide.md">Guide</a> ·
   <a href="docs/architecture.md">Architecture</a> ·
   <a href="docs/algorithms.md">Algorithms and guarantees</a> ·
   <a href="examples/vault-math">vault-math example</a> ·
