@@ -94,4 +94,8 @@ grep -q "start = 1668464001" reports/token-ledger-fuzz.txt
 step "Demo: diff token-ledger on both backends, seed 7"
 demo diff token-ledger 0 "1 agreed, 0 diverged, 0 infrastructure errors"
 
+step "Demo: fuzz amm-swap (a real first draft that overflows u64), seed 7"
+demo fuzz amm-swap 1 "0 passed, 3 failed, 0 infrastructure errors" --no-corpus
+grep -q "reserve_out = 10312385981465" reports/amm-swap-fuzz.txt
+
 step "CI passed"
