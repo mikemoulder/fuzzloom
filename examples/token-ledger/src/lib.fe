@@ -1,0 +1,154 @@
+//! token-ledger: a two-account token with transfer fees and a vesting
+//! schedule, written the way Fe makes contract logic testable: the ledger
+//! state, the fee policy and the clock arrive as effects (`uses`), so the
+//! same functions run in a contract handler and under Fuzzloom.
+//!
+//! Fuzzloom discovers the `prop_*` and `diff_*` functions below and, for
+//! each effect, the `pub fn fixture_*()` that builds it. Every evaluation
+//! gets fresh fixture values, so evaluations are independent and a saved
+//! failure replays exactly.
+//!
+//! Two bugs are planted, each marked `PLANTED BUG` with its fix. Both pass
+//! the hand-written tests at the bottom of this file.
+
+use ingot::policy::{Clock, FeePolicy, FixedClock, fixture_clock, fixture_policy}
+
+/// Balances of the two accounts, and the fees collected so far.
+pub struct Ledger { pub alice: u128, pub bob: u128, pub fees: u128 }
+
+/// Fixture: Alice holds one million units.
+pub fn fixture_ledger() -> Ledger {
+    Ledger { alice: 1000000, bob: 0, fees: 0 }
+}
+
+/// Moves `amount` from Alice to Bob (or back), charging the policy fee to
+/// the recipient's side. Returns false, changing nothing, when the sender's
+/// balance is too small.
+pub fn transfer(_ amount: u128, to_bob: bool) -> bool
+uses (ledger: mut Ledger, policy: FeePolicy)
+{
+    let from = if to_bob { ledger.alice } else { ledger.bob }
+    if amount > from {
+        return false
+    }
+    let fee = policy.fee(amount)
+    let received = amount - fee
+    if to_bob {
+        ledger.alice = ledger.alice - amount
+        ledger.bob = ledger.bob + received
+    } else {
+        ledger.bob = ledger.bob - amount
+        ledger.alice = ledger.alice + received
+    }
+    ledger.fees = ledger.fees + fee
+    true
+}
+
+pub fn supply() -> u128 uses (ledger: Ledger) {
+    ledger.alice + ledger.bob + ledger.fees
+}
+
+/// A transfer never creates or destroys tokens. Fails through the fee bug:
+/// a transfer below the minimum fee underflows instead of being charged
+/// at most its own amount.
+pub fn prop_transfer_conserves_supply(_ amount: u128, to_bob: bool) -> bool
+uses (ledger: mut Ledger, policy: FeePolicy)
+{
+    let before = supply()
+    transfer(amount, to_bob)
+    supply() == before
+}
+
+/// Correct property (passes): an overdraft is rejected and changes nothing.
+pub fn prop_overdraft_changes_nothing(_ amount: u128) -> bool
+uses (ledger: mut Ledger, policy: FeePolicy)
+{
+    let alice = ledger.alice
+    if amount <= alice {
+        return true
+    }
+    !transfer(amount, to_bob: true) && ledger.alice == alice && ledger.bob == 0 && ledger.fees == 0
+}
+
+// --------------------------------------------------------------- vesting
+
+pub const CLIFF: u64 = 2592000
+// 30 days
+pub const DURATION: u64 = 31536000
+// 365 days
+
+/// Amount of a `total` grant vested at the clock's current time, for a
+/// schedule that started at `start`: nothing before the cliff, linear
+/// afterwards, everything after DURATION.
+///
+/// PLANTED BUG (overflow): `total * elapsed` is computed in u128, which
+/// overflows for grants above about 1.08e31 units.
+/// Fix: widen first, `((total as u256) * (elapsed as u256) / (DURATION as u256)).downcast_truncate()`.
+pub fn vested(_ total: u128, start: u64) -> u128 uses (clock: Clock) {
+    let now = clock.now()
+    if start >= now { return 0 }
+    let elapsed = now - start
+    if elapsed < CLIFF {
+        return 0
+    }
+    if elapsed >= DURATION {
+        return total
+    }
+    total * (elapsed as u128) / (DURATION as u128)
+}
+
+/// Vesting never releases more than the grant.
+pub fn prop_vested_never_exceeds_total(_ total: u128, start: u64) -> bool
+uses (clock: Clock)
+{
+    vested(total, start) <= total
+}
+
+/// Correct property (passes): a schedule that started later has vested no
+/// more.
+pub fn prop_vesting_is_monotone_in_start(_ total: u64, a: u64, b: u64) -> bool
+uses (clock: Clock)
+{
+    let (early, late) = if a <= b { (a, b) } else { (b, a) }
+    vested(total as u128, start: late) <= vested(total as u128, start: early)
+}
+
+// ------------------------------------------------- differential target
+
+/// The fee quote must be identical on the EVM and native backends.
+pub fn diff_fee_quote(_ amount: u64) -> u128 uses (policy: FeePolicy) {
+    policy.fee(amount as u128)
+}
+
+// ------------------------------------------------- hand-written tests
+
+#[test]
+fn transfer_of_a_typical_amount_conserves_supply() {
+    var ledger = fixture_ledger()
+    let policy = fixture_policy()
+    with (Ledger = ledger, FeePolicy = policy) {
+        assert!(transfer(10000, to_bob: true))
+        assert!(supply() == 1000000)
+    }
+    assert!(ledger.bob == 9975 && ledger.fees == 25)
+}
+
+#[test]
+fn overdraft_is_rejected() {
+    var ledger = fixture_ledger()
+    let policy = fixture_policy()
+    with (Ledger = ledger, FeePolicy = policy) {
+        assert!(!transfer(2000000, to_bob: true))
+    }
+    assert!(ledger.alice == 1000000)
+}
+
+#[test]
+fn vesting_cliff_and_end() {
+    let clock = FixedClock { at: 100000000 }
+    with (Clock = clock) {
+        assert!(vested(1000, start: 100000000 - CLIFF + 1) == 0)
+        assert!(vested(1000, start: 100000000 - DURATION) == 1000)
+        assert!(vested(1000, start: 100000000 - DURATION / 2) == 500)
+    }
+}

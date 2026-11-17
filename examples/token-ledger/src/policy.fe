@@ -1,0 +1,44 @@
+//! Configuration and time, as effect types. A contract handler provides
+//! real values; Fuzzloom provides the fixtures below, fresh for every
+//! evaluation.
+
+/// Transfer fee: `bps` basis points, but never less than `min_fee`.
+pub struct FeePolicy { pub bps: u128, pub min_fee: u128 }
+
+impl FeePolicy {
+    /// Fee charged on a transfer of `amount`.
+    ///
+    /// PLANTED BUG (tiny transfers): the minimum fee is not capped at the
+    /// amount, so a transfer smaller than `min_fee` charges more than it
+    /// moves and the ledger's `amount - fee` underflows.
+    /// Fix: `if f < self.min_fee { if self.min_fee < amount { self.min_fee } else { amount } } else { f }`.
+    pub fn fee(self, _ amount: u128) -> u128 {
+        let f = amount * self.bps / 10000
+        if f < self.min_fee { self.min_fee } else { f }
+    }
+}
+
+/// The source of the current time.
+pub trait Clock {
+    fn now(self) -> u64
+}
+
+/// A clock frozen at one instant, for tests and fixtures.
+pub struct FixedClock { pub at: u64 }
+
+impl Clock for FixedClock {
+    fn now(self) -> u64 {
+        self.at
+    }
+}
+
+/// Fixture: 25 bps with a minimum fee of 5 units.
+pub fn fixture_policy() -> FeePolicy {
+    FeePolicy { bps: 25, min_fee: 5 }
+}
+
+/// Fixture for the `Clock` trait effect (found by its name, since it
+/// returns the concrete FixedClock): 14 Nov 2023.
+pub fn fixture_clock() -> FixedClock {
+    FixedClock { at: 1700000000 }
+}
