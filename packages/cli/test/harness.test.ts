@@ -6,7 +6,7 @@ import { join, resolve } from "node:path";
 import { caseName, fnv1a64, harnessBody, writeBatch, writeHarness, type Case } from "../src/harness.ts";
 import { runBatch, runHarness } from "../src/fe.ts";
 import { discover } from "../src/discover.ts";
-import type { Target } from "../src/types.ts";
+import type { Target, Words } from "../src/types.ts";
 
 test("fnv1a64 matches reference vectors", () => {
   assert.equal(fnv1a64(""), 0xcbf29ce484222325n);
@@ -26,6 +26,13 @@ test("harness bodies for every mode", () => {
   assert.equal(harnessBody(d, { mode: "digest", base: 7n, runs: 5n }), `digest(target2(prop_w), seed: derive_seed(7, ${id}), runs: 5)`);
   assert.equal(harnessBody(d, { mode: "checkpoints", base: 7n, first: 40n, step: 40n, count: 3 }),
     `digest_checkpoints(target2(prop_w), seed: derive_seed(7, ${id}), first: 40, step: 40, count: 3)`);
+  const cid = "0x" + fnv1a64("prop_w@0x5,0x6").toString(16);
+  assert.equal(harnessBody(two, { mode: "check", base: 7n, runs: 100n, corpus: [5n, 6n, 0n] }),
+    `check_mutating(prop2(prop_w), corpus: Input::two(0x5, 0x6), seed: derive_seed(7, ${cid}), runs: 100)`);
+  assert.equal(harnessBody(two, { mode: "input_at", base: 7n, iteration: 4n, corpus: [5n, 6n, 0n] }),
+    `mutant_at(prop2(prop_w), corpus: Input::two(0x5, 0x6), seed: derive_seed(7, ${cid}), iteration: 4)`);
+  assert.equal(harnessBody(two, { mode: "replay_at", base: 7n, iteration: 4n, corpus: [5n, 6n, 0n] }),
+    `replay(prop2(prop_w), input: mutated_at(bounds_of(prop2(prop_w)), arity: arity_of(prop2(prop_w)), corpus: Input::two(0x5, 0x6), seed: derive_seed(7, ${cid}), iteration: 4))`);
   assert.equal(harnessBody(two, { mode: "replay_at", base: 7n, iteration: 3n }),
     `replay(prop2(prop_w), input: generated_at(bounds_of(prop2(prop_w)), arity: arity_of(prop2(prop_w)), seed: derive_seed(7, ${id}), iteration: 3))`);
   assert.equal(harnessBody(d, { mode: "evaluate_at", base: 7n, iteration: 3n }),
@@ -62,6 +69,8 @@ test("every library function the harness generator calls is exported", () => {
     { mode: "checkpoints", base: 1n, first: 1n, step: 1n, count: 1 },
     { mode: "target_input_at", base: 1n, iteration: 1n }, { mode: "evaluate", input: [1n, 2n, 3n] },
     { mode: "replay_at", base: 1n, iteration: 1n }, { mode: "evaluate_at", base: 1n, iteration: 1n },
+    { mode: "check", base: 1n, runs: 1n, corpus: [1n, 2n, 3n] }, { mode: "input_at", base: 1n, iteration: 1n, corpus: [1n, 2n, 3n] },
+    { mode: "replay_at", base: 1n, iteration: 1n, corpus: [1n, 2n, 3n] },
   ];
   const used = new Set<string>();
   for (const arity of [1, 2, 3]) {
@@ -100,6 +109,27 @@ test("integration: one batch harness answers every case by name, including the n
   const g = r.outcomes[3]!, rep = r.outcomes[4]!;
   assert.equal(g.kind, "generated");
   assert.equal(rep.kind, "replayed");
+  if (g.kind === "generated" && rep.kind === "replayed") assert.deepEqual(rep.input, g.input);
+});
+
+test("integration: a mutation campaign runs through fe and its mutants are recoverable", async () => {
+  const root = resolve(import.meta.dirname, "../../../examples/vault-math");
+  const d = discover(root);
+  const withdraw = d.targets.find((x) => x.name === "prop_withdraw_never_overdraws")!;
+  const work = mkdtempSync(join(tmpdir(), "fuzzloom-"));
+  const corpus: Words = [1000n, 1001n, 0n]; // a saved failure on the off-by-one diagonal
+  const cases: Case[] = [
+    { target: withdraw, call: { mode: "check", base: 7n, runs: 2000n, corpus } },
+    { target: withdraw, call: { mode: "input_at", base: 7n, iteration: 5n, corpus } },
+    { target: withdraw, call: { mode: "replay_at", base: 7n, iteration: 5n, corpus } },
+  ];
+  const dir = writeBatch({ userRoot: root, ingot: d.ingot, cases, workDir: work, name: "mutate" });
+  const r = await runBatch(dir, cases.map((_, i) => caseName(i)), "sonatina");
+  const c = r.outcomes[0]!;
+  assert.equal(c.kind, "counterexample");
+  if (c.kind === "counterexample") assert.deepEqual(c.shrunk, [0n, 1n, 0n]);
+  const g = r.outcomes[1]!, rep = r.outcomes[2]!;
+  assert.ok(g.kind === "generated" && rep.kind === "replayed");
   if (g.kind === "generated" && rep.kind === "replayed") assert.deepEqual(rep.input, g.input);
 });
 

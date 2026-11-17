@@ -6,7 +6,7 @@ import { randomBytes } from "node:crypto";
 import { resolve } from "node:path";
 import { discover } from "./discover.ts";
 import { defaultFeConfig, feVersion } from "./fe.ts";
-import { describeAbort, runCases, runDiffs, runProperties, type Context, type DiffResult, type PropertyResult } from "./engine.ts";
+import { describeAbort, runCases, runDiffs, runProperties, type Context, type DiffResult, type PropertyResult, type Seed } from "./engine.ts";
 import type { Case } from "./harness.ts";
 import { listRecords, loadRecord, makeRecord, recordWords, saveRecord, type FailureRecord } from "./store.ts";
 import { bold, dim, formatResult, green, red, toJson, values, yellow } from "./report.ts";
@@ -28,12 +28,16 @@ Options:
   --runs <n>        inputs per property (default 10000; diff default 100000)
   --backend <b>     sonatina (EVM, default) or native
   --only <name>     run only targets whose name contains this text
+  --no-corpus       fuzz: skip the mutation campaigns seeded from saved failures
   --json            machine-readable output
   -h, --help
 
 Exit codes: 0 all passed, 1 a property failed or aborted, 2 infrastructure error.`;
 
-type Opts = { seed?: string; runs?: string; backend: string; only?: string; json: boolean };
+type Opts = { seed?: string; runs?: string; backend: string; only?: string; json: boolean; "no-corpus": boolean };
+
+/** Most saved failures seeding mutation campaigns, per property (most recently updated first). */
+const SEEDS_PER_TARGET = 8;
 
 async function main(argv: string[]): Promise<number> {
   const { values: v, positionals } = parseArgs({
@@ -45,6 +49,7 @@ async function main(argv: string[]): Promise<number> {
       backend: { type: "string", default: "sonatina" },
       only: { type: "string" },
       json: { type: "boolean", default: false },
+      "no-corpus": { type: "boolean", default: false },
       help: { type: "boolean", short: "h", default: false },
     },
   });
@@ -99,13 +104,16 @@ async function fuzz(root: string, opts: Opts): Promise<number> {
     userRoot: root, ingot: d.ingot, backend, fe,
     onRun: progress(opts),
   };
+  const seeds = opts["no-corpus"] ? new Map<string, Seed[]>() : seedsFrom(root, d, targets);
+  const seeded = [...seeds.values()].reduce((a, s) => a + s.length, 0);
   if (!opts.json) {
-    console.log(`${bold("fuzzloom fuzz")} ${d.ingot}  ${dim(`seed ${base}, ${runs} runs, ${backend}, ${version}`)}`);
+    const corpus = seeded ? `, ${seeded} mutation campaign${seeded === 1 ? "" : "s"} from saved failures` : "";
+    console.log(`${bold("fuzzloom fuzz")} ${d.ingot}  ${dim(`seed ${base}, ${runs} runs, ${backend}, ${version}${corpus}`)}`);
     for (const s of d.skipped) console.log(`${yellow("SKIP")}  ${s.name}  ${dim(`${s.file}:${s.line}`)}  ${s.reason}`);
   }
   const started = Date.now();
   const results: { result: PropertyResult; record?: string }[] = [];
-  for (const r of await runProperties(ctx, targets, base, runs)) {
+  for (const r of await runProperties(ctx, targets, base, runs, seeds)) {
     const t = r.target;
     let id: string | undefined;
     if (r.status === "failed" || r.status === "aborted") {
@@ -114,6 +122,7 @@ async function fuzz(root: string, opts: Opts): Promise<number> {
         target: t, input: r.input, original: r.original,
         iteration: r.iteration, base, runs, backend, feVersion: version,
         ...(r.status === "aborted" ? { detail: r.abort } : {}),
+        ...(r.seededBy ? { seededBy: r.seededBy } : {}),
       });
       saveRecord(root, rec);
       id = rec.id;
@@ -130,6 +139,23 @@ async function fuzz(root: string, opts: Opts): Promise<number> {
     console.log(`\n${passed} passed, ${failed} failed, ${infra} infrastructure errors in ${seconds(started)}  ${dim(`(repeat with --seed ${base})`)}`);
   }
   return infra > 0 ? 2 : failed > 0 ? 1 : 0;
+}
+
+/**
+ * Saved property and abort failures (open or fixed) whose target still
+ * exists with the same signature, as mutation seeds. A fixed record is the
+ * point: its neighbourhood is where an incomplete fix still fails.
+ */
+function seedsFrom(root: string, d: Discovery, targets: Target[]): Map<string, Seed[]> {
+  const out = new Map<string, Seed[]>();
+  const records = listRecords(root)
+    .filter((r) => r.kind !== "differential")
+    .sort((a, b) => b.updated_at.localeCompare(a.updated_at));
+  for (const t of targets) {
+    const same = records.filter((r) => r.target === t.name && r.args.length === t.args.length && r.args.every((a, i) => a.type === t.args[i]!.type));
+    if (same.length) out.set(t.name, same.slice(0, SEEDS_PER_TARGET).map((r) => ({ record: r.id, input: recordWords(r) })));
+  }
+  return out;
 }
 
 function seconds(since: number): string {

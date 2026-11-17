@@ -26,10 +26,18 @@ export type Context = {
 
 export type Stats = { edgeArgs: bigint; correlated: bigint; extremes: bigint };
 
+/** A saved failure whose neighbourhood a mutation campaign explores. */
+export type Seed = { record: string; input: Words };
+
+/**
+ * `mutated` on a pass counts the mutation campaigns that also passed;
+ * `seededBy` on a failure names the saved failure whose mutation campaign
+ * found it (iteration then counts mutants, not campaign inputs).
+ */
 export type PropertyResult =
-  | { status: "passed"; target: Target; runs: bigint; stats: Stats; feRuns: number }
-  | { status: "failed"; target: Target; iteration: bigint; original: Words; input: Words; shrinkAttempts: bigint; shrinkComplete: boolean; feRuns: number }
-  | { status: "aborted"; target: Target; iteration: bigint; original: Words; input: Words; abort: string; shrinkAborted: boolean; shrinkRounds: number; shrinkReplays: number; shrinkComplete: boolean; feRuns: number }
+  | { status: "passed"; target: Target; runs: bigint; stats: Stats; mutated: number; feRuns: number }
+  | { status: "failed"; target: Target; iteration: bigint; original: Words; input: Words; shrinkAttempts: bigint; shrinkComplete: boolean; seededBy?: string; feRuns: number }
+  | { status: "aborted"; target: Target; iteration: bigint; original: Words; input: Words; abort: string; shrinkAborted: boolean; shrinkRounds: number; shrinkReplays: number; shrinkComplete: boolean; seededBy?: string; feRuns: number }
   | { status: "infra"; target: Target; reason: string; detail: string; feRuns: number };
 
 export function workDir(userRoot: string): string {
@@ -276,28 +284,51 @@ export async function shrinkByReplay(target: Target, input: Words, maxRounds: nu
 // ----------------------------------------------------------- property runs
 
 /**
- * Runs every property campaign in one round. A property that aborts (Fe
- * cannot catch a panic or a revert, so the payload carries no input) is
- * recovered with recoverAbort.
+ * Runs every property campaign in one round: the fresh campaign of each
+ * target plus one mutation campaign per saved failure in `seeds` (same
+ * runs, same fe run, so seeding costs no extra compile). A campaign that
+ * aborts (Fe cannot catch a panic or a revert, so the payload carries no
+ * input) is recovered with recoverAbort.
+ *
+ * Per target, the fresh campaign's failure, abort or infrastructure outcome
+ * wins; otherwise the first mutation campaign that fails, aborts or hits an
+ * infrastructure outcome is reported; otherwise the target passes.
  */
-export async function runProperties(ctx: Context, targets: Target[], base: bigint, runs: bigint): Promise<PropertyResult[]> {
+export async function runProperties(ctx: Context, targets: Target[], base: bigint, runs: bigint, seeds: Map<string, Seed[]> = new Map()): Promise<PropertyResult[]> {
   if (targets.length === 0) return [];
-  const first = await runCases(ctx, targets.map((target) => ({ target, call: { mode: "check", base, runs } })), "check");
+  const cases: Case[] = [];
+  const owner: { t: number; seed?: Seed }[] = [];
+  for (const [t, target] of targets.entries()) {
+    cases.push({ target, call: { mode: "check", base, runs } });
+    owner.push({ t });
+    for (const seed of seeds.get(target.name) ?? []) {
+      cases.push({ target, call: { mode: "check", base, runs, corpus: seed.input } });
+      owner.push({ t, seed });
+    }
+  }
+  const outcomes = await runCases(ctx, cases, "check");
   const out: PropertyResult[] = [];
-  for (const [i, target] of targets.entries()) {
-    const o = first[i]!;
-    if (o.kind === "passed") {
-      out.push({ status: "passed", target, runs: o.runs, stats: { edgeArgs: o.edgeArgs, correlated: o.correlated, extremes: o.extremes }, feRuns: 1 });
-    } else if (o.kind === "counterexample") {
+  for (const [t, target] of targets.entries()) {
+    const mine = outcomes.flatMap((o, i) => (owner[i]!.t === t ? [{ o, seed: owner[i]!.seed }] : []));
+    const fresh = mine[0]!;
+    const decisive = fresh.o.kind !== "passed" ? fresh : mine.slice(1).find((m) => m.o.kind !== "passed");
+    if (!decisive) {
+      const o = fresh.o as Extract<Outcome, { kind: "passed" }>;
+      out.push({ status: "passed", target, runs: o.runs, stats: { edgeArgs: o.edgeArgs, correlated: o.correlated, extremes: o.extremes }, mutated: mine.length - 1, feRuns: 1 });
+      continue;
+    }
+    const { o, seed } = decisive;
+    const seededBy = seed ? { seededBy: seed.record } : {};
+    if (o.kind === "counterexample") {
       out.push({
         status: "failed", target, iteration: o.iteration, original: o.original, input: o.shrunk,
-        shrinkAttempts: o.shrinkAttempts, shrinkComplete: o.shrinkComplete, feRuns: 1,
+        shrinkAttempts: o.shrinkAttempts, shrinkComplete: o.shrinkComplete, feRuns: 1, ...seededBy,
       });
     } else if (isAbort(o)) {
-      out.push(await recoverAbort(ctx, target, base, runs, o));
+      out.push({ ...(await recoverAbort(ctx, target, base, runs, o, seed?.input)), ...seededBy } as PropertyResult);
     } else {
       const s = Stop.of(o, ctx.backend, "a campaign payload");
-      out.push({ status: "infra", target, reason: s.reason, detail: s.detail, feRuns: 1 });
+      out.push({ status: "infra", target, reason: s.reason, detail: seed ? `${s.detail} (mutation campaign of ${seed.record})` : s.detail, feRuns: 1 });
     }
   }
   return out;
@@ -318,15 +349,19 @@ export async function runProperties(ctx: Context, targets: Target[], base: bigin
  *      property fails normally and the shrinker hit an aborting candidate.
  *   3. shrinkByReplay, demanding the same abort.
  *
+ * With `corpus`, the same steps run on that mutation campaign: its stream
+ * is prefix-consistent too (mutant_at, mutated_at).
+ *
  * Cost: 1 + roundsFor(runs - 1, width) + 1 + shrink rounds fe runs.
  */
-export async function recoverAbort(ctx: Context, target: Target, base: bigint, runs: bigint, first: Outcome): Promise<PropertyResult> {
+export async function recoverAbort(ctx: Context, target: Target, base: bigint, runs: bigint, first: Outcome, corpus?: Words): Promise<PropertyResult> {
+  const c = corpus ? { corpus } : {};
   const meter: Meter = { feRuns: 1 };
   const run = (calls: HarnessCall[], label: string) => runCases(ctx, calls.map((call) => ({ target, call })), `${target.name}-${label}`, ctx.backend, meter);
   try {
     const width = chooseWidth(runs - 1n, ctx.maxWidth);
     const found = await searchFirst(1n, runs, width, async (ks) => {
-      const os = await run(ks.map((k) => ({ mode: "check", base, runs: k })), "search");
+      const os = await run(ks.map((k) => ({ mode: "check", base, runs: k, ...c })), "search");
       return os.map((o) => {
         if (isAbort(o)) return true;
         if (o.kind === "passed") return false;
@@ -334,7 +369,7 @@ export async function recoverAbort(ctx: Context, target: Target, base: bigint, r
       });
     });
     const iteration = found.value - 1n;
-    const [g, rep] = await run([{ mode: "input_at", base, iteration }, { mode: "replay_at", base, iteration }], "recover");
+    const [g, rep] = await run([{ mode: "input_at", base, iteration, ...c }, { mode: "replay_at", base, iteration, ...c }], "recover");
     if (g!.kind !== "generated") throw Stop.of(g!, ctx.backend, "Generated");
     let reproduces: (o: Outcome) => boolean;
     let abort: string;

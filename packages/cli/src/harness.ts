@@ -25,17 +25,22 @@ export function fnv1a64(text: string): bigint {
   return h;
 }
 
+/**
+ * `corpus` on check, input_at and replay_at switches from the fresh campaign
+ * to a mutation campaign around that saved input (check_mutating,
+ * mutant_at, mutated_at), with its own seed.
+ */
 export type HarnessCall =
-  | { mode: "check"; base: bigint; runs: bigint }
+  | { mode: "check"; base: bigint; runs: bigint; corpus?: Words }
   | { mode: "replay"; input: Words }
-  | { mode: "input_at"; base: bigint; iteration: bigint }
+  | { mode: "input_at"; base: bigint; iteration: bigint; corpus?: Words }
   | { mode: "digest"; base: bigint; runs: bigint }
   /** Prefix digests after first, first + step, ... (count of them) runs, from one pass. */
   | { mode: "checkpoints"; base: bigint; first: bigint; step: bigint; count: number }
   | { mode: "target_input_at"; base: bigint; iteration: bigint }
   | { mode: "evaluate"; input: Words }
   /** replay on the input the campaign draws at `iteration`, in one case. */
-  | { mode: "replay_at"; base: bigint; iteration: bigint }
+  | { mode: "replay_at"; base: bigint; iteration: bigint; corpus?: Words }
   /** evaluate on the input the digest draws at `iteration`, in one case. */
   | { mode: "evaluate_at"; base: bigint; iteration: bigint };
 
@@ -43,8 +48,10 @@ export type Case = { target: Target; call: HarnessCall };
 
 const hex = (n: bigint) => "0x" + n.toString(16);
 
-function seedExpr(t: Target, base: bigint): string {
-  return `derive_seed(${base}, ${hex(fnv1a64(t.name))})`;
+/** The campaign seed: per property, and per saved input for mutation campaigns. */
+function seedExpr(t: Target, base: bigint, corpus?: Words): string {
+  const key = corpus ? `${t.name}@${corpus.slice(0, t.args.length).map(hex).join(",")}` : t.name;
+  return `derive_seed(${base}, ${hex(fnv1a64(key))})`;
 }
 
 function inputExpr(t: Target, w: Words): string {
@@ -58,10 +65,14 @@ export function harnessBody(t: Target, call: HarnessCall): string {
   const n = t.args.length;
   const wrapped = t.kind === "property" ? `prop${n}(${t.name})` : `target${n}(${t.name})`;
   switch (call.mode) {
-    case "check": return `check(${wrapped}, seed: ${seedExpr(t, call.base)}, runs: ${call.runs})`;
+    case "check":
+      return call.corpus
+        ? `check_mutating(${wrapped}, corpus: ${inputExpr(t, call.corpus)}, seed: ${seedExpr(t, call.base, call.corpus)}, runs: ${call.runs})`
+        : `check(${wrapped}, seed: ${seedExpr(t, call.base)}, runs: ${call.runs})`;
     case "replay": return `replay(${wrapped}, input: ${inputExpr(t, call.input)})`;
     case "input_at": {
       const p = `prop${n}(${t.name})`;
+      if (call.corpus) return `mutant_at(${p}, corpus: ${inputExpr(t, call.corpus)}, seed: ${seedExpr(t, call.base, call.corpus)}, iteration: ${call.iteration})`;
       return `input_at(${p}, bounds: bounds_of(${p}), seed: ${seedExpr(t, call.base)}, iteration: ${call.iteration})`;
     }
     case "digest": return `digest(${wrapped}, seed: ${seedExpr(t, call.base)}, runs: ${call.runs})`;
@@ -70,7 +81,9 @@ export function harnessBody(t: Target, call: HarnessCall): string {
     case "evaluate": return `evaluate(${wrapped}, input: ${inputExpr(t, call.input)})`;
     case "replay_at": {
       const p = `prop${n}(${t.name})`;
-      const gen = `generated_at(bounds_of(${p}), arity: arity_of(${p}), seed: ${seedExpr(t, call.base)}, iteration: ${call.iteration})`;
+      const gen = call.corpus
+        ? `mutated_at(bounds_of(${p}), arity: arity_of(${p}), corpus: ${inputExpr(t, call.corpus)}, seed: ${seedExpr(t, call.base, call.corpus)}, iteration: ${call.iteration})`
+        : `generated_at(bounds_of(${p}), arity: arity_of(${p}), seed: ${seedExpr(t, call.base)}, iteration: ${call.iteration})`;
       return `replay(${p}, input: ${gen})`;
     }
     case "evaluate_at": {

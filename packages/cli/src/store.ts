@@ -29,6 +29,8 @@ export type FailureRecord = {
   runs: string;
   backend: Backend | "both";
   detail?: string;
+  /** The saved failure whose mutation campaign found this one. */
+  seeded_by?: string;
   fe_version: string;
   status: "open" | "fixed";
   created_at: string;
@@ -48,7 +50,7 @@ export function recordId(target: string, input: Words, arity: number): string {
 
 export function makeRecord(o: {
   kind: FailureRecord["kind"]; target: Target; input: Words; original?: Words; iteration: bigint;
-  base: bigint; runs: bigint; backend: FailureRecord["backend"]; detail?: string; feVersion: string;
+  base: bigint; runs: bigint; backend: FailureRecord["backend"]; detail?: string; seededBy?: string; feVersion: string;
 }): FailureRecord {
   const n = o.target.args.length;
   const now = new Date().toISOString();
@@ -66,6 +68,7 @@ export function makeRecord(o: {
     runs: o.runs.toString(),
     backend: o.backend,
     ...(o.detail ? { detail: o.detail } : {}),
+    ...(o.seededBy ? { seeded_by: o.seededBy } : {}),
     fe_version: o.feVersion,
     status: "open",
     created_at: now,

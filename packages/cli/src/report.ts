@@ -31,18 +31,19 @@ export function formatResult(r: PropertyResult, id?: string): string[] {
       return [
         `${green("PASS")}  ${sig}  ${dim(`${r.runs} inputs`)}`,
         dim(`      ${r.stats.edgeArgs} of ${draws} argument draws were edge values${corr}, ${extremesText(t, r.stats.extremes)}`),
+        ...(r.mutated ? [dim(`      ${r.mutated} mutation campaign${r.mutated === 1 ? "" : "s"} around saved failures also passed (${r.runs} mutants each)`)] : []),
       ];
     }
     case "failed":
       return [
-        `${red("FAIL")}  ${sig}  ${dim(`counterexample at input ${r.iteration + 1n}`)}`,
+        `${red("FAIL")}  ${sig}  ${dim(r.seededBy ? `counterexample at mutant ${r.iteration + 1n} of saved failure ${r.seededBy}` : `counterexample at input ${r.iteration + 1n}`)}`,
         ...values(t, r.input).map((l) => `      ${bold(l)}`),
         dim(`      shrunk from ${t.args.map((a, i) => describe(r.original[i]!, a.type)).join(", ")} in ${r.shrinkAttempts} evaluations${r.shrinkComplete ? "" : " (budget reached, may not be minimal)"}`),
         ...(id ? [dim(`      reproduce: fuzzloom reproduce ${id}`)] : []),
       ];
     case "aborted":
       return [
-        `${red("ABORT")} ${sig}  ${r.abort}  ${dim(`at input ${r.iteration + 1n}`)}`,
+        `${red("ABORT")} ${sig}  ${r.abort}  ${dim(r.seededBy ? `at mutant ${r.iteration + 1n} of saved failure ${r.seededBy}` : `at input ${r.iteration + 1n}`)}`,
         ...values(t, r.input).map((l) => `      ${bold(l)}`),
         dim(r.shrinkAborted
           ? "      the property returns false here; in-Fe shrinking stopped because a smaller candidate aborted"
