@@ -1,5 +1,6 @@
 // parseFeOutput against fe test output recorded from real runs (fe 26.6.0).
 import { test } from "node:test";
+import { SELECTORS } from "../src/abi.ts";
 import assert from "node:assert/strict";
 import { parseBatchOutput, parseFeOutput } from "../src/fe.ts";
 
@@ -71,6 +72,15 @@ test("an unsupported native host is reported as such", () => {
 test("a harness that returns without a payload is not a pass", () => {
   const o = parseFeOutput("PASS  [0.0003s] h\n\ntest result: ok. 1 passed; 0 failed");
   assert.equal(o.kind === "infra" && o.reason, "unparsed");
+});
+
+test("a known selector with a truncated body is infra, not a crash", () => {
+  // Digest needs four words; this carries one.
+  const o = parseFeOutput(`FAIL  [0.001s] h
+    Test reverted: ${SELECTORS.digest}${"0".repeat(63)}1
+`);
+  assert.equal(o.kind === "infra" && o.reason, "unparsed");
+  assert.match(o.kind === "infra" ? o.detail : "", /malformed payload: Digest payload has 1 words/);
 });
 
 // Recorded from a four-test vault-math harness on sonatina (completion order, not case order).

@@ -17,7 +17,14 @@ export type BatchRun = { outcomes: Outcome[]; output: string; ms: number };
 /** Classifies the text `fe test` printed for a single-test harness. */
 export function parseFeOutput(text: string): Outcome {
   const payload = text.match(/Test reverted: (0x[0-9a-fA-F]*)/);
-  if (payload) return decodePayload(payload[1]!);
+  if (payload) {
+    try {
+      return decodePayload(payload[1]!);
+    } catch (e) {
+      // A known selector with a malformed body is not a result we can trust.
+      return { kind: "infra", reason: "unparsed", detail: `malformed payload: ${(e as Error).message}` };
+    }
+  }
   if (/OutOfGas/.test(text)) {
     return { kind: "infra", reason: "out-of-gas", detail: firstLine(text, /OutOfGas[^\n]*/) };
   }
