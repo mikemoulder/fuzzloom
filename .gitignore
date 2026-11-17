@@ -46,3 +46,6 @@ examples/*/.fuzzloom/failures/
 
 # Spike scratch harnesses
 .tmp/
+
+# CI output (scripts/ci.sh)
+reports/

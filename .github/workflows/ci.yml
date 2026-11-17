@@ -16,59 +16,18 @@ jobs:
     steps:
       - uses: actions/checkout@v4
 
-      - name: Install Fe 26.6.0
-        run: |
-          curl -fsSL https://raw.githubusercontent.com/argotorg/fe/master/feup/feup.sh | bash -s -- --version v26.6.0
-          echo "$HOME/.fe/bin" >> "$GITHUB_PATH"
-
-      - name: Check the Fe version
-        run: fe --version | grep -q "^fe 26.6.0"
-
-      - name: Format
-        run: fe fmt --check ingots/fuzzloom
-
-      - name: Fe tests on sonatina (EVM) and native
-        run: bash scripts/test-both.sh
-
       - uses: actions/setup-node@v4
         with:
           node-version: "22"
           cache: npm
 
-      - run: npm ci
-
-      - name: CLI typecheck
-        run: npm run typecheck
-
-      - name: CLI tests (unit + integration through fe on both backends)
-        run: npm test
-
-      # The demo must be reproducible: seed 7 finds exactly the documented
-      # planted bugs. Exit code 1 means failures were found; 2 would mean an
-      # infrastructure error and fails the job.
-      - name: Demo, fuzz vault-math
-        run: |
-          set +e
-          node packages/cli/src/index.ts fuzz examples/vault-math --seed 7 --junit fuzz-junit.xml | tee fuzz.txt
-          code=${PIPESTATUS[0]}
-          set -e
-          test "$code" -eq 1
-          grep -q "3 passed, 4 failed, 0 infrastructure errors" fuzz.txt
-
-      - name: Demo, diff vault-math on both backends
-        run: |
-          set +e
-          node packages/cli/src/index.ts diff examples/vault-math --seed 7 --junit diff-junit.xml | tee diff.txt
-          code=${PIPESTATUS[0]}
-          set -e
-          test "$code" -eq 1
-          grep -q "3 agreed, 1 diverged, 0 infrastructure errors" diff.txt
-          grep -q "first at input 269" diff.txt
+      # The whole pipeline lives in scripts/ci.sh, shared with CircleCI.
+      - run: bash scripts/ci.sh
 
       - name: Upload JUnit reports
         if: always()
         uses: actions/upload-artifact@v4
         with:
           name: junit-reports
-          path: "*-junit.xml"
+          path: reports/
           if-no-files-found: ignore

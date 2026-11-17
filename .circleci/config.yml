@@ -1,0 +1,23 @@
+version: 2.1
+
+# Same pipeline as GitHub Actions: everything lives in scripts/ci.sh.
+jobs:
+  test:
+    docker:
+      - image: cimg/node:22.18
+    resource_class: medium
+    steps:
+      - checkout
+      - run:
+          name: CI (Fe tests on both backends, CLI tests, seeded demo)
+          command: bash scripts/ci.sh
+          no_output_timeout: 20m
+      - store_test_results:
+          path: reports
+      - store_artifacts:
+          path: reports
+
+workflows:
+  ci:
+    jobs:
+      - test
