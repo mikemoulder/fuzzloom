@@ -53,6 +53,17 @@ npm run typecheck
 step "CLI tests (unit, and integration through fe on both backends)"
 npm test
 
+step "Package: pack, install into an empty prefix, run outside the repo"
+pkg_tmp="$(mktemp -d)"
+(cd packages/cli && npm pack --silent --pack-destination "$pkg_tmp" >/dev/null)
+npm install -g --silent --prefix "$pkg_tmp/prefix" "$pkg_tmp"/fuzzloom-*.tgz
+mkdir -p "$pkg_tmp/project"
+cp -r examples/vault-math/fe.toml examples/vault-math/src "$pkg_tmp/project/"
+(cd "$pkg_tmp/project" && "$pkg_tmp/prefix/bin/fuzzloom" doctor && "$pkg_tmp/prefix/bin/fuzzloom" list >/dev/null)
+"$pkg_tmp/prefix/bin/fuzzloom" doctor "$pkg_tmp/project" | grep -q "lib/node_modules/fuzzloom/ingot" \
+  || { echo "the installed CLI did not use its bundled Fe library"; exit 1; }
+rm -rf "$pkg_tmp"
+
 mkdir -p reports
 
 # Exit code 1 means findings, which the demo must have; 2 would mean an
