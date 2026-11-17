@@ -2,7 +2,9 @@
 
 All notable changes to Fuzzloom. The project follows [semantic versioning](https://semver.org); while the version is 0.x, minor versions may change behaviour.
 
-## Unreleased
+## 0.1.1 (2026-11-18)
+
+A security release: upgrade if you run Fuzzloom on projects you do not control. `npx fuzzloom@latest` picks it up.
 
 ### Security
 
@@ -13,7 +15,11 @@ Found in a security audit of the CLI, each confirmed with a working exploit, fix
 - On Windows, a quote in the project path broke out of the command Fuzzloom ran inside WSL for the native backend, and could run commands there. WSL is now invoked with `-e` and the path as a separate argument, so paths with quotes also work.
 - A malformed file in `.fuzzloom/failures` no longer aborts `fuzz` and `replay`; it is skipped with a warning. Text from records is stripped of control characters before it is printed.
 
-### Examples
+### Package
+
+- The npm page links the website and docs, https://fuzzloom.pages.dev.
+
+### Examples (in the repository, not the npm package)
 
 - `amm-swap`: a Uniswap v2 style swap quote, exactly as first drafted in a live session. Nothing planted: `fuzz` finds a real `u64` overflow on the first run, and the README records a `u128` fix that `replay` accepted but a fresh campaign rejected. CI asserts its seed-7 result.
 
