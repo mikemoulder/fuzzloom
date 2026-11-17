@@ -167,23 +167,73 @@ const bitLen = (v: bigint) => v.toString(2).length - (v === 0n ? 1 : 0);
 const size = (w: Words, n: number) => w.slice(0, n).reduce((a, v) => a + bitLen(v), 0);
 const total = (w: Words, n: number) => w.slice(0, n).reduce((a, v) => a + v, 0n);
 
-/** One round of single-argument candidates: each nonzero argument set to 0 or shifted right by 1, 2, 4, 8, ... */
+const gcd = (a: bigint, b: bigint): bigint => (b === 0n ? a : gcd(b, a % b));
+
+/** Power-of-two right-shift amounts that still leave a nonzero value: 1, 2, 4, 8, ... */
+const shifts = (v: bigint): bigint[] => {
+  const out: bigint[] = [];
+  for (let s = 1; s < bitLen(v); s *= 2) out.push(BigInt(s));
+  return out;
+};
+
+/**
+ * Moves that change every argument at once, offered when at least two are
+ * nonzero. Single-argument moves get stuck when the failure lives on a
+ * relation between arguments (b == a + 1, b == 2a): every one-argument
+ * change leaves the relation and stops reproducing.
+ *   - all arguments to 0;
+ *   - proportional: divide all by their gcd g, and by each of 2, 3, 5, 7
+ *     dividing g (smaller steps keep b == 2a reachable when g overshoots);
+ *     halve all when g is 1;
+ *   - diagonal: subtract the same d from all, for the smallest argument m:
+ *     d = m, 1, and m >> s and m - (m >> s) for s in 1, 2, 4, 8, ...
+ */
+export function jointCandidates(best: Words, arity: number): Words[] {
+  const args = best.slice(0, arity);
+  if (args.filter((v) => v !== 0n).length < 2) return [];
+  const make = (f: (v: bigint) => bigint): Words => {
+    const c: Words = [...best];
+    for (let i = 0; i < arity; i++) c[i] = f(best[i]!);
+    return c;
+  };
+  const out: Words[] = [make(() => 0n)];
+  const g = args.reduce((a, v) => gcd(a, v), 0n);
+  const divisors = new Set<bigint>(g > 1n ? [g, ...[2n, 3n, 5n, 7n].filter((p) => p < g && g % p === 0n)] : [2n]);
+  for (const d of divisors) out.push(make((v) => v / d));
+  const m = args.reduce((a, v) => (v < a ? v : a));
+  if (m > 0n) {
+    // m >> s steps refine near the floor; m - (m >> s) steps move the
+    // smallest argument straight to m >> s, removing bits quickly.
+    const steps = new Set<bigint>([m, 1n, ...shifts(m).flatMap((s) => [m >> s, m - (m >> s)])]);
+    for (const d of steps) out.push(make((v) => v - d));
+  }
+  return out;
+}
+
+/**
+ * One round of candidates: each nonzero argument alone set to 0 or shifted
+ * right by 1, 2, 4, 8, ..., then the jointCandidates. Deduplicated, and
+ * never the input itself.
+ */
 export function shrinkCandidates(best: Words, arity: number): Words[] {
   const out: Words[] = [];
+  const seen = new Set<string>([best.join(",")]);
+  const push = (c: Words) => {
+    const k = c.join(",");
+    if (seen.has(k)) return;
+    seen.add(k);
+    out.push(c);
+  };
   for (let i = 0; i < arity; i++) {
     const v = best[i]!;
     if (v === 0n) continue;
-    const seen = new Set<bigint>();
-    const add = (x: bigint) => {
-      if (seen.has(x)) return;
-      seen.add(x);
+    for (const x of [0n, ...shifts(v).map((s) => v >> s)]) {
       const c: Words = [...best];
       c[i] = x;
-      out.push(c);
-    };
-    add(0n);
-    for (let s = 1; s < bitLen(v); s *= 2) add(v >> BigInt(s));
+      push(c);
+    }
   }
+  for (const c of jointCandidates(best, arity)) push(c);
   return out;
 }
 
@@ -195,10 +245,11 @@ export function shrinkCandidates(best: Words, arity: number): Words[] {
  * sum). `reproduces` must demand the same failure (for aborts, the same
  * panic code or revert message), so shrinking cannot slide onto another bug.
  *
- * Guarantee: when complete, no single argument can be set to 0 or shifted
- * right by any power of two and still reproduce (a local minimum under
- * those moves). Limit: not a global minimum, and joint moves are not tried.
- * At most `maxRounds` fe runs.
+ * Guarantee: when complete, no shrinkCandidates move (single-argument zero
+ * or power-of-two shift, or a jointCandidates move) still reproduces: a
+ * local minimum under those moves. Limit: not a global minimum; relations
+ * other than common divisors and equal offsets are not followed. At most
+ * `maxRounds` fe runs.
  */
 export async function shrinkByReplay(target: Target, input: Words, maxRounds: number, reproduces: (ws: Words[]) => Promise<boolean[]>): Promise<{ input: Words; rounds: number; replays: number; complete: boolean }> {
   const n = target.args.length;

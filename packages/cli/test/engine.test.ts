@@ -1,6 +1,6 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
-import { checkpointCall, chooseWidth, MAX_CHECKPOINTS, narrow, probePoints, roundsFor, searchFirst, shrinkByReplay, shrinkCandidates } from "../src/engine.ts";
+import { checkpointCall, chooseWidth, jointCandidates, MAX_CHECKPOINTS, narrow, probePoints, roundsFor, searchFirst, shrinkByReplay, shrinkCandidates } from "../src/engine.ts";
 import type { Target, Words } from "../src/types.ts";
 
 const t2: Target = { kind: "property", name: "p", args: [{ name: "a", type: "u64" }, { name: "b", type: "u64" }], file: "f", line: 1 };
@@ -117,6 +117,42 @@ test("reaches the stated local minimum and never accepts a non-reproducing candi
   for (const c of shrinkCandidates(r.input, 2)) assert.ok(!fails(c), `move to ${c} still reproduces`);
   assert.ok(r.input[0]! < 2000n, `shift by 1 must get below 2*threshold, got ${r.input[0]}`);
   assert.equal(r.input[1], 7n);
+});
+
+/** True when no single-argument move (the pre-joint candidate set) still reproduces. */
+const stuckOnSingles = (w: Words, fails: (w: Words) => boolean) =>
+  shrinkCandidates(w, 2).filter((c) => c.filter((v, i) => v !== w[i]).length === 1).every((c) => !fails(c));
+
+test("joint moves walk a diagonal failure (b == a + 1) down to its exact floor", async () => {
+  // The vault-math withdraw shape, with a floor so the answer is not just (0, 1).
+  const fails = (w: Words) => w[1] === w[0]! + 1n && w[0]! >= 10n;
+  const start: Words = [(1n << 100n) + 12345n, (1n << 100n) + 12346n, 0n];
+  assert.ok(stuckOnSingles(start, fails), "single-argument moves alone cannot leave the start");
+  const { f } = batched(fails);
+  const r = await shrinkByReplay(t2, start, 64, f);
+  assert.deepEqual(r.input, [10n, 11n, 0n]);
+  assert.equal(r.complete, true);
+});
+
+test("joint moves follow a proportional failure (b == 2a) where the gcd step overshoots", async () => {
+  const fails = (w: Words) => w[1] === 2n * w[0]! && w[0]! >= 3n;
+  const start: Words = [96n, 192n, 0n]; // gcd 96 jumps to (1, 2), which passes
+  assert.ok(stuckOnSingles(start, fails));
+  const { f } = batched(fails);
+  const r = await shrinkByReplay(t2, start, 64, f);
+  // 96 -> 32 (by 3) -> 16 -> 8 -> 4 (by 2). (4, 8) is a local minimum, not
+  // the global (3, 6): reaching 3 would need scaling by 3/4, which no move
+  // offers. This pins the documented limit.
+  assert.deepEqual(r.input, [4n, 8n, 0n]);
+  for (const c of shrinkCandidates(r.input, 2)) assert.ok(!fails(c), `move to ${c} still reproduces`);
+});
+
+test("jointCandidates: none for fewer than two nonzero arguments, never the input itself", () => {
+  assert.deepEqual(jointCandidates([5n, 0n, 0n], 2), []);
+  assert.deepEqual(jointCandidates([5n, 9n, 7n], 1), []);
+  const c = shrinkCandidates([6n, 6n, 0n], 2).map((w) => w.join(","));
+  assert.ok(!c.includes("6,6,0") && new Set(c).size === c.length);
+  assert.ok(c.includes("0,0,0") && c.includes("3,3,0") && c.includes("2,2,0") && c.includes("5,5,0"));
 });
 
 test("respects the round budget", async () => {
