@@ -8,7 +8,7 @@
   <a href="#quick-start"><img alt="fe 26.6" src="https://img.shields.io/badge/fe-26.6-eef0f3?labelColor=0b0d12"></a>
   <a href="#quick-start"><img alt="Node 22.18+" src="https://img.shields.io/badge/node-22.18%2B-eef0f3?labelColor=0b0d12"></a>
   <a href="#testing"><img alt="Fe tests: 94 on both backends" src="https://img.shields.io/badge/Fe%20tests-94%20%C3%97%202%20backends-5ad1ff?labelColor=0b0d12"></a>
-  <a href="#testing"><img alt="CLI tests: 67" src="https://img.shields.io/badge/CLI%20tests-67-eef0f3?labelColor=0b0d12"></a>
+  <a href="#testing"><img alt="CLI tests: 79" src="https://img.shields.io/badge/CLI%20tests-79-eef0f3?labelColor=0b0d12"></a>
   <a href="#at-a-glance"><img alt="Runtime dependencies: 0" src="https://img.shields.io/badge/runtime%20dependencies-0-eef0f3?labelColor=0b0d12"></a>
   <a href="#license"><img alt="License: Apache-2.0" src="https://img.shields.io/badge/license-Apache--2.0-eef0f3?labelColor=0b0d12"></a>
 </p>
@@ -364,7 +364,7 @@ Two Fe-specific limits shape campaign sizes. `fe test` caps each EVM test at 10^
 | Suite | Count | What it covers |
 |---|---|---|
 | Fe library and examples | **94 tests, run on sonatina and on native** | PRNG streams and known answers, unbiased sampling, every generator, every shrink guarantee, prefix consistency, digest and checkpoint exactness, mutation bounds, a known-answer digest recorded identically from both backends |
-| CLI | **67 tests** | Discovery (effects, fixtures, ranges, modules), harness generation for every mode, payload decoding, output parsing from real `fe` output, the k-ary search bound swept over every answer position, both replay shrinkers, JUnit, doctor, and integration tests that run real `fe` on both backends |
+| CLI | **79 tests** | Discovery (effects, fixtures, ranges, modules), saved-failure validation and symlink refusal (each replaying a security-audit exploit), harness generation for every mode, payload decoding, output parsing from real `fe` output, the k-ary search bound swept over every answer position, both replay shrinkers, JUnit, doctor, and integration tests that run real `fe` on both backends |
 | Pipeline | [`scripts/ci.sh`](scripts/ci.sh) | Installs Fe, checks formatting, runs both suites, packs the npm package and runs it outside the repo, then asserts that all three examples reproduce their documented seed-7 results |
 
 CI runs `scripts/ci.sh` on CircleCI, and the same script runs locally:

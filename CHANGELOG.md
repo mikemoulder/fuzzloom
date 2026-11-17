@@ -4,6 +4,15 @@ All notable changes to Fuzzloom. The project follows [semantic versioning](https
 
 ## Unreleased
 
+### Security
+
+Found in a security audit of the CLI, each confirmed with a working exploit, fixed, and covered by a regression test that replays it:
+
+- A saved failure whose `id` contained `../` made `replay` and `reproduce` write a JSON file anywhere, with any content (for example a neighbouring project's `package.json` with an install script). Records are now validated, must match their file name, and are rebuilt from known fields before saving.
+- A project shipping `.fuzzloom` as a symlink made Fuzzloom write outside it, and a run with no properties deleted the `tmp` directory the link pointed at. Symlinked `.fuzzloom`, `.fuzzloom/tmp` and `.fuzzloom/failures` are now refused.
+- On Windows, a quote in the project path broke out of the command Fuzzloom ran inside WSL for the native backend, and could run commands there. WSL is now invoked with `-e` and the path as a separate argument, so paths with quotes also work.
+- A malformed file in `.fuzzloom/failures` no longer aborts `fuzz` and `replay`; it is skipped with a warning. Text from records is stripped of control characters before it is printed.
+
 ### Examples
 
 - `amm-swap`: a Uniswap v2 style swap quote, exactly as first drafted in a live session. Nothing planted: `fuzz` finds a real `u64` overflow on the first run, and the README records a `u128` fix that `replay` accepted but a fresh campaign rejected. CI asserts its seed-7 result.
