@@ -96,33 +96,63 @@ ${vars.map((v) => `        ${v}
     })`;
 }
 
+/**
+ * The Bounds expression for `t`: its full type ranges, restricted per
+ * annotated argument. Every mode of a bounded target uses this same
+ * expression, so the campaign, input recovery, mutation and digests all draw
+ * from one domain.
+ */
+export function boundsExpr(t: Target): string {
+  const w = callable(t);
+  const full = t.kind === "property" ? `bounds_of(${w})` : `target_bounds_of(${w})`;
+  return (t.bounds ?? []).reduce((e, b) => `${e}.restrict(${b.arg}, lo: ${hex(b.lo)}, hi: ${hex(b.hi)})`, full);
+}
+
 /** The body of the harness test for `call` on `t`. */
 export function harnessBody(t: Target, call: HarnessCall): string {
   const wrapped = callable(t);
+  const bounded = Boolean(t.bounds?.length);
+  const B = boundsExpr(t);
+  const n = t.args.length;
   switch (call.mode) {
-    case "check":
-      return call.corpus
-        ? `check_mutating(${wrapped}, corpus: ${inputExpr(t, call.corpus)}, seed: ${seedExpr(t, call.base, call.corpus)}, runs: ${call.runs})`
-        : `check(${wrapped}, seed: ${seedExpr(t, call.base)}, runs: ${call.runs})`;
+    case "check": {
+      if (call.corpus) {
+        const tail = `corpus: ${inputExpr(t, call.corpus)}, seed: ${seedExpr(t, call.base, call.corpus)}, runs: ${call.runs}`;
+        return bounded ? `check_mutating_within(${wrapped}, bounds: ${B}, ${tail})` : `check_mutating(${wrapped}, ${tail})`;
+      }
+      const tail = `seed: ${seedExpr(t, call.base)}, runs: ${call.runs}`;
+      return bounded ? `check_bounded(${wrapped}, bounds: ${B}, ${tail})` : `check(${wrapped}, ${tail})`;
+    }
     case "replay": return `replay(${wrapped}, input: ${inputExpr(t, call.input)})`;
     case "input_at": {
-      const p = wrapped;
-      if (call.corpus) return `mutant_at(${p}, corpus: ${inputExpr(t, call.corpus)}, seed: ${seedExpr(t, call.base, call.corpus)}, iteration: ${call.iteration})`;
-      return `input_at(${p}, bounds: bounds_of(${p}), seed: ${seedExpr(t, call.base)}, iteration: ${call.iteration})`;
+      if (call.corpus) {
+        const tail = `corpus: ${inputExpr(t, call.corpus)}, seed: ${seedExpr(t, call.base, call.corpus)}, iteration: ${call.iteration}`;
+        return bounded ? `mutant_at_within(${wrapped}, bounds: ${B}, ${tail})` : `mutant_at(${wrapped}, ${tail})`;
+      }
+      return `input_at(${wrapped}, bounds: ${B}, seed: ${seedExpr(t, call.base)}, iteration: ${call.iteration})`;
     }
-    case "digest": return `digest(${wrapped}, seed: ${seedExpr(t, call.base)}, runs: ${call.runs})`;
-    case "checkpoints": return `digest_checkpoints(${wrapped}, seed: ${seedExpr(t, call.base)}, first: ${call.first}, step: ${call.step}, count: ${call.count})`;
-    case "target_input_at": return `target_input_at(${wrapped}, seed: ${seedExpr(t, call.base)}, iteration: ${call.iteration})`;
+    case "digest":
+      if (bounded) throw new Error("digest mode draws from the full type ranges; use checkpoints for a bounded target");
+      return `digest(${wrapped}, seed: ${seedExpr(t, call.base)}, runs: ${call.runs})`;
+    case "checkpoints": {
+      const tail = `seed: ${seedExpr(t, call.base)}, first: ${call.first}, step: ${call.step}, count: ${call.count}`;
+      return bounded ? `digest_checkpoints_within(${wrapped}, bounds: ${B}, ${tail})` : `digest_checkpoints(${wrapped}, ${tail})`;
+    }
+    case "target_input_at": {
+      const tail = `seed: ${seedExpr(t, call.base)}, iteration: ${call.iteration}`;
+      return bounded ? `target_input_at_within(${wrapped}, bounds: ${B}, ${tail})` : `target_input_at(${wrapped}, ${tail})`;
+    }
     case "evaluate": return `evaluate(${wrapped}, input: ${inputExpr(t, call.input)})`;
     case "replay_at": {
-      const p = wrapped;
       const gen = call.corpus
-        ? `mutated_at(bounds_of(${p}), arity: arity_of(${p}), corpus: ${inputExpr(t, call.corpus)}, seed: ${seedExpr(t, call.base, call.corpus)}, iteration: ${call.iteration})`
-        : `generated_at(bounds_of(${p}), arity: arity_of(${p}), seed: ${seedExpr(t, call.base)}, iteration: ${call.iteration})`;
-      return `replay(${p}, input: ${gen})`;
+        ? `mutated_at(${B}, arity: arity_of(${wrapped}), corpus: ${inputExpr(t, call.corpus)}, seed: ${seedExpr(t, call.base, call.corpus)}, iteration: ${call.iteration})`
+        : `generated_at(${B}, arity: arity_of(${wrapped}), seed: ${seedExpr(t, call.base)}, iteration: ${call.iteration})`;
+      return `replay(${wrapped}, input: ${gen})`;
     }
     case "evaluate_at": {
-      const gen = `target_generated_at(${wrapped}, seed: ${seedExpr(t, call.base)}, iteration: ${call.iteration})`;
+      const gen = bounded
+        ? `generated_at(${B}, arity: ${n}, seed: ${seedExpr(t, call.base)}, iteration: ${call.iteration})`
+        : `target_generated_at(${wrapped}, seed: ${seedExpr(t, call.base)}, iteration: ${call.iteration})`;
       return `evaluate(${wrapped}, input: ${gen})`;
     }
   }

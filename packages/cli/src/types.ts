@@ -34,6 +34,8 @@ export type Target = {
   imports?: string[];
   /** Effects, each with the fixture that builds a fresh value per evaluation. */
   effects?: Effect[];
+  /** Word ranges from `fuzzloom: <arg> in <lo>..=<hi>` annotations, sorted by argument. */
+  bounds?: { arg: number; lo: bigint; hi: bigint }[];
   /** Return type for differential targets. */
   returns?: FeType;
   file: string;

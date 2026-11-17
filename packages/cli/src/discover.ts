@@ -12,6 +12,7 @@
 import { readFileSync, readdirSync, statSync, existsSync } from "node:fs";
 import { join, relative } from "node:path";
 import { FE_TYPES, type FeType, type Target } from "./types.ts";
+import { parseBounds } from "./bounds.ts";
 
 export type Skipped = { name: string; file: string; line: number; reason: string };
 export type Discovery = { ingot: string; root: string; targets: Target[]; skipped: Skipped[] };
@@ -80,6 +81,18 @@ export function declarations(src: string): { fixtures: { name: string; returns: 
   return { fixtures, types, uses };
 }
 
+/** The doc-comment and attribute lines directly above 1-based line `line`. */
+function docAbove(src: string, line: number): string[] {
+  const lines = src.split(/\r?\n/);
+  const out: string[] = [];
+  for (let i = line - 2; i >= 0; i--) {
+    const l = lines[i]!.trim();
+    if (l.startsWith("///") || l.startsWith("#[")) out.unshift(l);
+    else break;
+  }
+  return out;
+}
+
 /** Finds targets in one source text. */
 export function discoverSource(src: string, file: string): { targets: RawTarget[]; skipped: Skipped[] } {
   const clean = stripComments(src);
@@ -109,7 +122,9 @@ export function discoverSource(src: string, file: string): { targets: RawTarget[
       args.push({ name: argName, type, label: label === "_" ? null : (label ?? argName) });
     }
     if (bad) { skip(bad); continue; }
-    const extra = uses ? { uses } : {};
+    const bounds = parseBounds(docAbove(src, line), args);
+    if (typeof bounds === "string") { skip(bounds); continue; }
+    const extra = { ...(uses ? { uses } : {}), ...(bounds.length ? { bounds } : {}) };
     if (kind === "property") {
       if (ret !== "bool") { skip(`properties must return bool, found ${ret ?? "nothing"}`); continue; }
       targets.push({ kind, name, args, file, line, ...extra });

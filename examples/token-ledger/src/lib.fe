@@ -98,6 +98,11 @@ pub fn vested(_ total: u128, start: u64) -> u128 uses (clock: Clock) {
 }
 
 /// Vesting never releases more than the grant.
+///
+/// The interesting schedules started within the last year before the
+/// fixture clock (1700000000). A uniform u64 start almost never lands there,
+/// so the range is declared:
+/// fuzzloom: start in 1668464000..=1700000000
 pub fn prop_vested_never_exceeds_total(_ total: u128, start: u64) -> bool
 uses (clock: Clock)
 {

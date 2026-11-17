@@ -258,16 +258,24 @@ export function shrinkCandidates(best: Words, arity: number): Words[] {
  * local minimum under those moves. Limit: not a global minimum; relations
  * other than common divisors and equal offsets are not followed. At most
  * `maxRounds` fe runs.
+ *
+ * Moves act on each argument's distance from its floor (the lower end of
+ * an annotated range, else 0), so no candidate leaves the declared domain.
  */
 export async function shrinkByReplay(target: Target, input: Words, maxRounds: number, reproduces: (ws: Words[]) => Promise<boolean[]>): Promise<{ input: Words; rounds: number; replays: number; complete: boolean }> {
   const n = target.args.length;
-  let best: Words = [...input];
+  const floor = floorOf(target);
+  const lift = (d: Words): Words => [d[0] + floor[0], d[1] + floor[1], d[2] + floor[2]];
+  // Work on distances from the floor; candidates are lifted back before replay.
+  let best: Words = [input[0] - floor[0], input[1] - floor[1], input[2] - floor[2]];
+  if (best.some((d) => d < 0n)) throw new Error(`input below the declared floor of ${target.name}`);
   let rounds = 0;
   let replays = 0;
+  const done = (complete: boolean) => ({ input: lift(best), rounds, replays, complete });
   while (rounds < maxRounds) {
     const cands = shrinkCandidates(best, n);
-    if (cands.length === 0) return { input: best, rounds, replays, complete: true };
-    const ok = await reproduces(cands);
+    if (cands.length === 0) return done(true);
+    const ok = await reproduces(cands.map(lift));
     rounds++;
     replays += cands.length;
     let pick: Words | undefined;
@@ -275,10 +283,17 @@ export async function shrinkByReplay(target: Target, input: Words, maxRounds: nu
       if (!ok[i]) return;
       if (!pick || size(c, n) < size(pick, n) || (size(c, n) === size(pick, n) && total(c, n) < total(pick, n))) pick = c;
     });
-    if (!pick) return { input: best, rounds, replays, complete: true };
+    if (!pick) return done(true);
     best = pick;
   }
-  return { input: best, rounds, replays, complete: shrinkCandidates(best, n).length === 0 };
+  return done(shrinkCandidates(best, n).length === 0);
+}
+
+/** The lowest word each argument may take: the annotated lower bound, else 0. */
+export function floorOf(t: Target): Words {
+  const f: Words = [0n, 0n, 0n];
+  for (const b of t.bounds ?? []) f[b.arg] = b.lo;
+  return f;
 }
 
 // ----------------------------------------------------------- property runs

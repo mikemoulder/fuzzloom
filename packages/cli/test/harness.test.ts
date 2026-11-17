@@ -191,3 +191,29 @@ test("integration: effectful targets run through fe on both backends", async () 
     assert.deepEqual(r.outcomes[3], { kind: "evaluated", arity: 1, input: [1000000n, 0n, 0n], output: 2500n }, backend);
   }
 });
+
+test("integration: every bounded entry point compiles, runs and stays in range", async () => {
+  const root = resolve(import.meta.dirname, "../../../examples/token-ledger");
+  const d = discover(root);
+  const quote: Target = { ...d.targets.find((x) => x.name === "diff_fee_quote")!, bounds: [{ arg: 0, lo: 1000n, hi: 2000n }] };
+  const over: Target = { ...d.targets.find((x) => x.name === "prop_overdraft_changes_nothing")!, bounds: [{ arg: 0, lo: 1000000n, hi: 1000100n }] };
+  const work = mkdtempSync(join(tmpdir(), "fuzzloom-"));
+  const cases: Case[] = [
+    { target: quote, call: { mode: "checkpoints", base: 3n, first: 1n, step: 10n, count: 3 } },
+    { target: quote, call: { mode: "target_input_at", base: 3n, iteration: 4n } },
+    { target: quote, call: { mode: "evaluate_at", base: 3n, iteration: 4n } },
+    { target: over, call: { mode: "check", base: 3n, runs: 300n } },
+    { target: over, call: { mode: "check", base: 3n, runs: 300n, corpus: [5n, 0n, 0n] } },
+    { target: over, call: { mode: "input_at", base: 3n, iteration: 7n } },
+    { target: over, call: { mode: "input_at", base: 3n, iteration: 7n, corpus: [5n, 0n, 0n] } },
+  ];
+  const dir = writeBatch({ userRoot: root, ingot: d.ingot, cases, workDir: work, name: "bounded" });
+  const o = (await runBatch(dir, cases.map((_, i) => caseName(i)), "sonatina")).outcomes;
+  assert.equal(o[0]!.kind === "checkpoints" && o[0]!.accs.length, 3);
+  const g = o[1]!, e = o[2]!;
+  assert.ok(g.kind === "generated" && g.input[0] >= 1000n && g.input[0] <= 2000n, JSON.stringify(g, (_, v) => typeof v === "bigint" ? String(v) : v));
+  assert.ok(e.kind === "evaluated" && g.kind === "generated" && e.input[0] === g.input[0], "evaluate_at evaluates the bounded input");
+  assert.equal(o[3]!.kind, "passed");
+  assert.equal(o[4]!.kind, "passed");
+  for (const x of [o[5]!, o[6]!]) assert.ok(x.kind === "generated" && x.input[0] >= 1000000n && x.input[0] <= 1000100n, "input within range (corpus clamped)");
+});
