@@ -37,6 +37,9 @@ Thumbs.db
 !docs/guide.md
 !docs/architecture.md
 !docs/algorithms.md
+!CONTRIBUTING.md
+!SECURITY.md
+!CHANGELOG.md
 
 # Fe debugging reports (fe build/test --report)
 *.tar.gz
