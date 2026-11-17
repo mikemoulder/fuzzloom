@@ -66,25 +66,32 @@ rm -rf "$pkg_tmp"
 
 mkdir -p reports
 
-# Exit code 1 means findings, which the demo must have; 2 would mean an
-# infrastructure error. Each demo also checks its documented summary.
+# Each demo runs one command on one example with seed 7 and checks the
+# documented summary. The expected exit code is 1 when the example has
+# findings and 0 when it has none; 2 would mean an infrastructure error.
 demo() {
-  local name="$1" expect="$2"; shift 2
-  local code
+  local cmd="$1" example="$2" want="$3" expect="$4"; shift 4
+  local out="reports/$example-$cmd" code
   set +e
-  node packages/cli/src/index.ts "$name" examples/vault-math --seed 7 --junit "reports/$name-junit.xml" "$@" \
-    | tee "reports/$name.txt"
+  node packages/cli/src/index.ts "$cmd" "examples/$example" --seed 7 --junit "$out-junit.xml" "$@" | tee "$out.txt"
   code=${PIPESTATUS[0]}
   set -e
-  [ "$code" -eq 1 ] || { echo "expected exit 1 (findings), got $code"; exit 1; }
-  grep -q "$expect" "reports/$name.txt" || { echo "missing: $expect"; exit 1; }
+  [ "$code" -eq "$want" ] || { echo "expected exit $want, got $code"; exit 1; }
+  grep -q "$expect" "$out.txt" || { echo "missing: $expect"; exit 1; }
 }
 
 step "Demo: fuzz vault-math, seed 7"
-demo fuzz "3 passed, 4 failed, 0 infrastructure errors" --no-corpus
+demo fuzz vault-math 1 "3 passed, 4 failed, 0 infrastructure errors" --no-corpus
 
 step "Demo: diff vault-math on both backends, seed 7"
-demo diff "3 agreed, 1 diverged, 0 infrastructure errors"
-grep -q "first at input 269" reports/diff.txt
+demo diff vault-math 1 "3 agreed, 1 diverged, 0 infrastructure errors"
+grep -q "first at input 269" reports/vault-math-diff.txt
+
+step "Demo: fuzz token-ledger (effects and declared ranges), seed 7"
+demo fuzz token-ledger 1 "2 passed, 2 failed, 0 infrastructure errors" --no-corpus
+grep -q "start = 1668464001" reports/token-ledger-fuzz.txt
+
+step "Demo: diff token-ledger on both backends, seed 7"
+demo diff token-ledger 0 "1 agreed, 0 diverged, 0 infrastructure errors"
 
 step "CI passed"
