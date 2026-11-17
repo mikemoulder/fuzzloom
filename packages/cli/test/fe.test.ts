@@ -2,7 +2,31 @@
 import { test } from "node:test";
 import { SELECTORS } from "../src/abi.ts";
 import assert from "node:assert/strict";
-import { parseBatchOutput, parseFeOutput } from "../src/fe.ts";
+import { spawnSync } from "node:child_process";
+import { parseBatchOutput, parseFeOutput, wslArgs, wslFeTestArgs, type FeConfig } from "../src/fe.ts";
+
+const cfg: FeConfig = { bin: "fe", wslBin: "~/.fe/bin/fe", timeoutMs: 60_000 };
+// The path from the security audit's proof of concept: a quote that closed the old quoting.
+const hostile = "/mnt/c/x'; cd; touch FUZZLOOM_QPWN; echo '/$HOME/\"q\"/`id`/.fuzzloom/tmp/check-native";
+
+test("WSL commands never go through the default shell", () => {
+  assert.deepEqual(wslArgs(cfg, ["wslpath", "-a", "C:/x"]), ["-e", "wslpath", "-a", "C:/x"]);
+  assert.deepEqual(wslArgs({ ...cfg, wslDistro: "Ubuntu" }, ["true"]), ["-d", "Ubuntu", "-e", "true"]);
+  const a = wslFeTestArgs(cfg, ["test", "--backend", "native"], hostile);
+  assert.ok(!a.includes("--"), "-- would hand the line to the default shell");
+  // the script is fixed text, and the path is its own argument, untouched
+  assert.deepEqual(a, ["-e", "bash", "-lc", 'exec ~/.fe/bin/fe "$@"', "fuzzloom", "test", "--backend", "native", hostile]);
+});
+
+const hasWsl = process.platform === "win32" && spawnSync("wsl", ["-e", "true"]).status === 0;
+
+test("a hostile path reaches fe inside WSL as one literal argument", { skip: !hasWsl && "needs Windows with WSL" }, () => {
+  const echo: FeConfig = { ...cfg, wslBin: "printf '[%s]\\n'" };
+  const r = spawnSync("wsl", wslFeTestArgs(echo, ["test", "--color", "never"], hostile), { encoding: "utf8" });
+  assert.equal(r.stdout, `[test]\n[--color]\n[never]\n[${hostile}]\n`);
+  const probe = spawnSync("wsl", wslArgs(cfg, ["bash", "-c", 'test -e "$HOME/FUZZLOOM_QPWN" && echo yes || echo no']), { encoding: "utf8" });
+  assert.equal(probe.stdout.trim(), "no", "the command hidden in the path must not run");
+});
 
 const PANIC_NATIVE = `FAIL  [0.0018s] h
     Test reverted: 0x4e487b710000000000000000000000000000000000000000000000000000000000000012

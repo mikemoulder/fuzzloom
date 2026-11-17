@@ -105,9 +105,28 @@ export function defaultFeConfig(): FeConfig {
 
 const viaWsl = (backend: Backend) => backend === "native" && process.platform === "win32";
 
+/**
+ * Arguments for wsl.exe that run `args` inside WSL exactly as given. `-e`
+ * execs the command directly; `--` would hand the joined line to the default
+ * shell, which re-splits it and expands `$`, quotes and `;` in any argument
+ * (a path containing `'` could run commands). Verified on WSL 2.
+ */
+export function wslArgs(cfg: FeConfig, args: string[]): string[] {
+  return [...(cfg.wslDistro ? ["-d", cfg.wslDistro] : []), "-e", ...args];
+}
+
+/**
+ * `fe test` inside WSL on the harness at `wdir`. The script is fixed text:
+ * the fe arguments and the path reach bash as positional parameters, so no
+ * byte of the path is ever parsed as shell syntax. A login shell expands the
+ * `~` in wslBin (trusted: it comes from FE_WSL_BIN or the default).
+ */
+export function wslFeTestArgs(cfg: FeConfig, feArgs: string[], wdir: string): string[] {
+  return wslArgs(cfg, ["bash", "-lc", `exec ${cfg.wslBin} "$@"`, "fuzzloom", ...feArgs, wdir]);
+}
+
 function wsl(cfg: FeConfig, args: string[]): ReturnType<typeof spawnSync> {
-  const pre = cfg.wslDistro ? ["-d", cfg.wslDistro] : [];
-  return spawnSync("wsl", [...pre, "--", ...args], { encoding: "utf8", timeout: cfg.timeoutMs });
+  return spawnSync("wsl", wslArgs(cfg, args), { encoding: "utf8", timeout: cfg.timeoutMs });
 }
 
 /** Converts a Windows path for use inside WSL. */
@@ -150,9 +169,7 @@ export async function runBatch(dir: string, names: string[], backend: Backend, c
   try {
     if (viaWsl(backend)) {
       const wdir = toWslPath(cfg, dir);
-      const quoted = [cfg.wslBin, ...feArgs, `'${wdir}'`].join(" ");
-      const pre = cfg.wslDistro ? ["-d", cfg.wslDistro] : [];
-      r = await capture("wsl", [...pre, "--", "bash", "-lc", quoted], cfg.timeoutMs);
+      r = await capture("wsl", wslFeTestArgs(cfg, feArgs, wdir), cfg.timeoutMs);
     } else {
       r = await capture(cfg.bin, [...feArgs, dir], cfg.timeoutMs);
     }
