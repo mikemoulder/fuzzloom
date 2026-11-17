@@ -26,6 +26,16 @@ pub use check::{
     input_at,
     SHRINK_BUDGET,
 }
+pub use mutate::{
+    mutate,
+    mutate_word,
+    mutated_at,
+    clamp_input,
+    find_mutating,
+    check_mutating,
+    mutant_at,
+    MAX_STACK,
+}
 pub use diff::{
     Target,
     Fn1,

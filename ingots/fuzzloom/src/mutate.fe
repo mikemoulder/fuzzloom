@@ -1,0 +1,348 @@
+//! Corpus-seeded mutation.
+//!
+//! A mutation campaign explores the neighbourhood of one known input (a
+//! saved failure) instead of the whole input space. Each mutant starts from
+//! the corpus input and stacks 1 to 4 random operators on it: small steps up
+//! or down, a single bit flip, an edge value, halving or doubling the
+//! distance from the lower bound, a fresh uniform draw, or a copy of another
+//! argument (plus or minus one). Mutants never accumulate, so every one stays
+//! near the corpus.
+//!
+//! What it is for: after a fix, the exact saved input passes, but a fix
+//! that only special-cases that input leaves its neighbours failing. A fresh
+//! campaign almost never lands there again; a mutation campaign does.
+//!
+//! The stream is a pure function of (bounds, arity, corpus, seed, i), like
+//! the campaign stream, so the CLI recovers the input of an aborting
+//! mutation campaign the same way (`mutant_at`).
+
+use ingot::rng::{Rng, bit_len}
+use ingot::bias::edge
+use ingot::input::{Bounds, Input}
+use ingot::property::{Property, bounds_of}
+use ingot::draw::Stats
+use ingot::shrink::{Shrunk, shrink_input}
+use ingot::check::{Report, SHRINK_BUDGET, conclude}
+use ingot::payload::Generated
+use std::evm::revert_error
+
+/// Most operators stacked on one mutant.
+pub const MAX_STACK: u64 = 4
+
+fn clamp(_ v: u256, lo: u256, hi: u256) -> u256 {
+    if v < lo { lo } else if v > hi { hi } else { v }
+}
+
+/// `x` with every argument moved into `b` (a corpus saved under other
+/// bounds still yields in-bounds mutants).
+pub fn clamp_input(_ x: Input, _ b: Bounds, arity: u64) -> Input {
+    var out = x
+    var i: u64 = 0
+    while i < arity {
+        out = out.with(i, clamp(x.get(i), lo: b.lo.get(i), hi: b.hi.get(i)))
+        i += 1
+    }
+    out
+}
+
+/// One operator applied to `w` within `lo..=hi`. `other` is another
+/// argument's current word, for the copy operator. Always in range.
+pub fn mutate_word(_ w: u256, lo: u256, hi: u256, other: u256, _ rng: mut Rng) -> u256 {
+    let op = rng.next_u64() % 8
+    if op == 0 {
+        let d = rng.below_or_eq(15) + 1
+        return if hi - w >= d { w + d } else { hi }
+    }
+    if op == 1 {
+        let d = rng.below_or_eq(15) + 1
+        return if w - lo >= d { w - d } else { lo }
+    }
+    if op == 2 {
+        let bits = bit_len(hi)
+        if bits == 0 { return w }
+        let k = rng.below_or_eq(bits - 1)
+        let bit: u256 = 1 << k
+        return clamp(w ^ bit, lo, hi)
+    }
+    if op == 3 {
+        return edge(lo, hi, mut rng)
+    }
+    if op == 4 {
+        return lo + (w - lo) / 2
+    }
+    if op == 5 {
+        let dist = w - lo
+        return if hi - w >= dist { w + dist } else { hi }
+    }
+    if op == 6 {
+        let r = rng.next_u64() % 3
+        let v = if r == 0 {
+            other
+        } else if r == 1 {
+            if other < hi { other + 1 } else { other }
+        } else {
+            if other > lo { other - 1 } else { other }
+        }
+        return clamp(v, lo, hi)
+    }
+    // op 7: a fresh uniform draw, so a campaign can also leave the
+    // neighbourhood along one argument.
+    lo + rng.below_or_eq(hi - lo)
+}
+
+/// The next mutant of `corpus` (already clamped into `b`).
+///
+/// Guarantee: every argument lies within `b`, and arguments past `arity`
+/// are zero.
+pub fn mutate(_ corpus: Input, _ b: Bounds, arity: u64, _ rng: mut Rng) -> Input {
+    var x = corpus
+    let stack = 1 + rng.next_u64() % MAX_STACK
+    var s: u64 = 0
+    while s < stack {
+        let i = rng.next_u64() % arity
+        let other = x.get((i + 1) % arity)
+        x = x.with(
+                i,
+                mutate_word(
+                    x.get(i),
+                    lo: b.lo.get(i),
+                    hi: b.hi.get(i),
+                    other,
+                    mut rng,
+                ),
+            )
+        s += 1
+    }
+    x
+}
+
+/// The mutant a campaign of `corpus` draws at `iteration`.
+pub fn mutated_at(_ b: Bounds, arity: u64, corpus: Input, seed: u64, iteration: u64) -> Input {
+    let c = clamp_input(corpus, b, arity)
+    var rng = Rng::new(seed)
+    var x = c
+    var i: u64 = 0
+    while i <= iteration {
+        x = mutate(c, b, arity, mut rng)
+        i += 1
+    }
+    x
+}
+
+/// Runs `p` over `runs` mutants of `corpus`, shrinking toward `bounds.lo`
+/// on the first failure. Like `find`, the first failure (or abort) is at
+/// the same iteration for every `runs` past it.
+pub fn find_mutating<P: Property>(
+    _ p: P,
+    bounds: Bounds,
+    corpus: Input,
+    seed: u64,
+    runs: u64,
+    budget: u64,
+) -> Report
+uses P::E
+{
+    let arity = P::arity()
+    let c = clamp_input(corpus, bounds, arity)
+    var rng = Rng::new(seed)
+    var i: u64 = 0
+    while i < runs {
+        let x = mutate(c, bounds, arity, mut rng)
+        if !p.holds(x) {
+            let s = shrink_input(p, failing: x, floor: bounds.lo, budget)
+            return Report {
+                failed: true,
+                arity,
+                seed,
+                runs,
+                iteration: i,
+                original: x,
+                shrunk: s,
+                stats: Stats::new(),
+            }
+        }
+        i += 1
+    }
+    Report {
+        failed: false,
+        arity,
+        seed,
+        runs,
+        iteration: runs,
+        original: Input::zero(),
+        shrunk: Shrunk { input: Input::zero(), attempts: 0, complete: true },
+        stats: Stats::new(),
+    }
+}
+
+/// Harness entry point: a mutation campaign around `corpus` over the
+/// property's full bounds. Ends with Counterexample or Passed.
+pub fn check_mutating<P: Property>(_ p: P, corpus: Input, seed: u64, runs: u64) -> !
+uses P::E
+{
+    conclude(
+        find_mutating(
+            p,
+            bounds: bounds_of(p),
+            corpus,
+            seed,
+            runs,
+            budget: SHRINK_BUDGET,
+        ),
+    )
+}
+
+/// Harness entry point: the mutant at `iteration`. Evaluates nothing.
+pub fn mutant_at<P: Property>(_ p: P, corpus: Input, seed: u64, iteration: u64) -> ! {
+    let arity = P::arity()
+    let x = mutated_at(bounds_of(p), arity, corpus, seed, iteration)
+    revert_error(
+        Generated { seed, iteration, arity, input0: x.w0, input1: x.w1, input2: x.w2 },
+    )
+}
+
+// ---------------------------------------------------------------- tests
+
+use ingot::property::{prop1, prop2, prop3}
+use ingot::check::find_all
+
+#[test]
+fn mutants_stay_within_bounds() {
+    // Tight, offset bounds and a corpus outside them: every mutant must still
+    // land inside, for every argument.
+    let b = Bounds { lo: Input::three(100, 0, 7), hi: Input::three(200, 1, 0xFFFFFFFF) }
+    var rng = Rng::new(3)
+    let c = clamp_input(Input::three(5000, 9, 3), b, arity: 3)
+    var i: u64 = 0
+    while i < 3000 {
+        let x = mutate(c, b, arity: 3, mut rng)
+        var a: u64 = 0
+        while a < 3 {
+            assert!(x.get(a) >= b.lo.get(a) && x.get(a) <= b.hi.get(a))
+            a += 1
+        }
+        i += 1
+    }
+}
+
+#[test]
+fn arguments_past_arity_stay_zero() {
+    let b = Bounds::full(0xFFFF, 0xFFFF, 0xFFFF)
+    var rng = Rng::new(8)
+    var i: u64 = 0
+    while i < 500 {
+        let x = mutate(Input::two(10, 20), b, arity: 2, mut rng)
+        assert!(x.w2 == 0)
+        i += 1
+    }
+}
+
+#[test]
+fn mutated_at_reproduces_the_stream() {
+    let b = Bounds::full(0xFFFFFFFFFFFFFFFF, 0xFFFFFFFFFFFFFFFF, 0)
+    let c = Input::two(123456789, 987654321)
+    var rng = Rng::new(21)
+    var i: u64 = 0
+    while i < 60 {
+        let x = mutate(c, b, arity: 2, mut rng)
+        assert!(
+            x.same(
+                mutated_at(b, arity: 2, corpus: c, seed: 21, iteration: i),
+            ),
+        )
+        i += 1
+    }
+}
+
+fn special_cased_fix(_ x: u256) -> bool {
+    // An incomplete fix: the saved failing input C passes now, but its
+    // neighbours within 3 still fail.
+    let c: u256 = 0x1234567890abcdef1234567890abcdef1234567890abcdef1234567890abcd
+    if x == c { return true }
+    let d = if x > c { x - c } else { c - x }
+    d > 3
+}
+
+#[test]
+fn mutation_finds_an_incomplete_fix_that_fresh_campaigns_miss() {
+    let p = prop1(|x: u256| special_cased_fix(x))
+    let c: u256 = 0x1234567890abcdef1234567890abcdef1234567890abcdef1234567890abcd
+    // A fresh campaign over all of u256 does not find the 6-value window.
+    assert!(!find_all(p, seed: 1, runs: 2000).failed)
+    // Mutating the saved input does, and shrinks within the window.
+    let r = find_mutating(
+        p,
+        bounds: bounds_of(p),
+        corpus: Input::one(c),
+        seed: 1,
+        runs: 2000,
+        budget: SHRINK_BUDGET,
+    )
+    assert!(r.failed)
+    assert!(!special_cased_fix(r.shrunk.input.w0))
+    assert!(r.iteration < 200)
+}
+
+#[test]
+fn copy_operator_reaches_correlated_neighbours() {
+    // Fails only when b == a + 1 near the corpus: needs the copy operator or
+    // a stacked step, not a fresh draw.
+    let p = prop2(|a: u128, b: u128| b != a + 1 || a < 1000)
+    let r = find_mutating(
+        p,
+        bounds: bounds_of(p),
+        corpus: Input::two(0xFFFFFFFFFFFF, 7),
+        seed: 4,
+        runs: 3000,
+        budget: SHRINK_BUDGET,
+    )
+    assert!(r.failed)
+    assert!(r.shrunk.input.w1 == r.shrunk.input.w0 + 1)
+}
+
+#[test]
+fn mutation_campaign_failures_are_prefix_consistent() {
+    // The first failing iteration is the same for every run count past it,
+    // which is what lets the CLI recover an aborting mutation campaign.
+    let p = prop3(|a: u8, b: u8, c: u8| a != b || c > 200)
+    let corpus = Input::three(10, 30, 0)
+    let full = find_mutating(
+        p,
+        bounds: bounds_of(p),
+        corpus,
+        seed: 6,
+        runs: 5000,
+        budget: 0,
+    )
+    assert!(full.failed)
+    let at = find_mutating(
+        p,
+        bounds: bounds_of(p),
+        corpus,
+        seed: 6,
+        runs: full.iteration + 1,
+        budget: 0,
+    )
+    assert!(at.failed && at.iteration == full.iteration)
+    assert!(
+        at.original
+            .same(
+                mutated_at(
+                    bounds_of(p),
+                    arity: 3,
+                    corpus,
+                    seed: 6,
+                    iteration: full.iteration,
+                ),
+            ),
+    )
+    let before = find_mutating(
+        p,
+        bounds: bounds_of(p),
+        corpus,
+        seed: 6,
+        runs: full.iteration,
+        budget: 0,
+    )
+    assert!(!before.failed)
+}
