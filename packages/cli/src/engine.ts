@@ -156,3 +156,71 @@ export function shrinkByReplay(target: Target, input: Words, budget: number, rep
   }
   return { input: best, replays, complete: !progressed };
 }
+
+export type DiffResult =
+  | { status: "agreed"; target: Target; runs: bigint; acc: bigint; feRuns: number }
+  | { status: "diverged"; target: Target; iteration: bigint; input: Words; outputs: { sonatina: bigint; native: bigint }; feRuns: number }
+  | { status: "infra"; target: Target; backend: Backend; reason: string; detail: string; feRuns: number };
+
+/**
+ * Differential run of one target on sonatina and native.
+ *
+ * Digests are prefix-consistent (the first k folds are identical for any run
+ * count >= k), so "digests differ at k runs" is monotone in k and bisection
+ * finds the first diverging input in about log2(runs) rounds of one fe run
+ * per backend. That input is recovered with target_input_at and evaluated on
+ * both backends to show the two outputs. An infrastructure outcome on either
+ * backend (out of gas, compile error, no native host) is reported as such,
+ * never as a divergence.
+ */
+export function runDiff(base: Context, target: Target, seedBase: bigint, runs: bigint): DiffResult {
+  let feRuns = 0;
+  const on = (backend: Backend) => ({ ...base, backend });
+  const both = (c: HarnessCall): { s: Outcome; n: Outcome } | DiffResult => {
+    const s = call(on("sonatina"), target, c).outcome;
+    feRuns++;
+    if (s.kind === "infra") return { status: "infra", target, backend: "sonatina", reason: s.reason, detail: s.detail, feRuns };
+    const n = call(on("native"), target, c).outcome;
+    feRuns++;
+    if (n.kind === "infra") return { status: "infra", target, backend: "native", reason: n.reason, detail: n.detail, feRuns };
+    return { s, n };
+  };
+  const isResult = (x: unknown): x is DiffResult => typeof x === "object" && x !== null && "status" in x;
+  const accOf = (o: Outcome): bigint | undefined => (o.kind === "digest" ? o.acc : undefined);
+  const describeNonDigest = (o: Outcome) => (o.kind === "panic" || o.kind === "revert" ? describeAbort(o) : o.kind);
+
+  const full = both({ mode: "digest", base: seedBase, runs });
+  if (isResult(full)) return full;
+  const sa = accOf(full.s), na = accOf(full.n);
+  if (sa === undefined || na === undefined) {
+    // An abort while digesting is a result about the target, not a backend
+    // difference, unless only one backend aborts.
+    const which: Backend = sa === undefined ? "sonatina" : "native";
+    return { status: "infra", target, backend: which, reason: "aborted", detail: `${describeNonDigest(which === "sonatina" ? full.s : full.n)} while digesting`, feRuns };
+  }
+  if (sa === na) return { status: "agreed", target, runs, acc: sa, feRuns };
+
+  let lo = 1n;
+  let hi = runs;
+  while (lo < hi) {
+    const mid = (lo + hi) / 2n;
+    const r = both({ mode: "digest", base: seedBase, runs: mid });
+    if (isResult(r)) return r;
+    if (accOf(r.s) !== accOf(r.n)) hi = mid;
+    else lo = mid + 1n;
+  }
+  const iteration = hi - 1n;
+  const g = call(on("sonatina"), target, { mode: "target_input_at", base: seedBase, iteration }).outcome;
+  feRuns++;
+  if (g.kind !== "generated") {
+    return g.kind === "infra"
+      ? { status: "infra", target, backend: "sonatina", reason: g.reason, detail: g.detail, feRuns }
+      : { status: "infra", target, backend: "sonatina", reason: "unexpected", detail: `expected Generated, got ${g.kind}`, feRuns };
+  }
+  const ev = both({ mode: "evaluate", input: g.input });
+  if (isResult(ev)) return ev;
+  if (ev.s.kind !== "evaluated" || ev.n.kind !== "evaluated") {
+    return { status: "infra", target, backend: "sonatina", reason: "unexpected", detail: "evaluate did not return Evaluated", feRuns };
+  }
+  return { status: "diverged", target, iteration, input: g.input, outputs: { sonatina: ev.s.output, native: ev.n.output }, feRuns };
+}
