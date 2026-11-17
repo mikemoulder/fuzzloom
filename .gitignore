@@ -64,3 +64,6 @@ packages/cli/LICENSE
 
 # Local Claude Code skills (third-party, never committed)
 .claude/
+
+# The website lives in its own repository
+site/
