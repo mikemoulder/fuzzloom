@@ -10,7 +10,7 @@
 //! payload and no input. The campaign is built so the input is still
 //! recoverable: the first failure or abort happens at the same iteration
 //! for every `runs` greater than it (see `prefix_consistent_failures`), so
-//! the CLI bisects on `runs` to find that iteration, then calls `input_at`
+//! the CLI searches on `runs` (k-ary search) to find that iteration, then calls `input_at`
 //! for the input and `replay` to tell a property panic from a shrink panic.
 
 use ingot::rng::Rng
@@ -286,7 +286,7 @@ fn three_argument_campaign_runs() {
 
 #[test]
 fn prefix_consistent_failures() {
-    // The bisection contract: with the same seed, runs <= i passes and every
+    // The search contract: with the same seed, runs <= i passes and every
     // runs > i fails at iteration i with the same original input.
     let p = prop1(|x: u64| x % 97 != 13)
     let full = find_all(p, seed: 42, runs: 100000)

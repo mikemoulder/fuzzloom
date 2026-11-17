@@ -3,7 +3,7 @@
 //! Every campaign, `input_at` and digest draws inputs through `draw`, so the
 //! input at iteration i is a pure function of (bounds, arity, seed, i). That
 //! is what lets the CLI recover the input of a property that aborts instead
-//! of returning false: it finds the iteration by bisecting on `runs`, then
+//! of returning false: it finds the iteration by k-ary search on `runs`, then
 //! asks `generated_at` for the input.
 //!
 //! Each argument is drawn independently with boundary bias. For two or more
