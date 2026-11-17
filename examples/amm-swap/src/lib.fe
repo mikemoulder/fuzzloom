@@ -1,0 +1,73 @@
+//! amm-swap: the quote of a constant-product pool (x * y = k) with a 0.3%
+//! swap fee, as a Uniswap v2 style pair computes it.
+//!
+//! This is a first draft exactly as it was written, before Fuzzloom saw it.
+//! Nothing here was planted: both hand-written tests pass, and the bug below
+//! was found by `fuzzloom fuzz` on the first run. See README.md for the
+//! session, including a first fix that Fuzzloom showed was still wrong.
+
+/// Tokens paid out for swapping `amount_in` into a pool that holds
+/// `reserve_in` of the input token and `reserve_out` of the output token.
+///
+/// BUG (found by Fuzzloom, not planted): the arithmetic runs in u64, so
+/// `amount_in * 997 * reserve_out` overflows for ordinary pools (2358 in
+/// against a 10^13 reserve) and the quote aborts with Panic 0x11.
+/// Widening to u128 is not enough: the numerator needs up to 138 bits.
+/// Fix: compute in u256, as Uniswap v2 does with uint256:
+///     let in_with_fee = (amount_in as u256) * 997
+///     let numerator = in_with_fee * (reserve_out as u256)
+///     let denominator = (reserve_in as u256) * 1000 + in_with_fee
+///     (numerator / denominator).downcast_truncate()
+pub fn get_amount_out(_ amount_in: u64, _ reserve_in: u64, _ reserve_out: u64) -> u64 {
+    if amount_in == 0 || reserve_in == 0 || reserve_out == 0 {
+        return 0
+    }
+    let in_with_fee = amount_in * 997
+    let numerator = in_with_fee * reserve_out
+    let denominator = reserve_in * 1000 + in_with_fee
+    numerator / denominator
+}
+
+// ------------------------------------------------------------- properties
+
+/// A swap can never pay out the whole output reserve.
+pub fn prop_swap_never_drains_pool(
+    _ amount_in: u64,
+    _ reserve_in: u64,
+    _ reserve_out: u64,
+) -> bool {
+    reserve_out == 0 || get_amount_out(amount_in, reserve_in, reserve_out) < reserve_out
+}
+
+/// After a swap the product of the reserves never shrinks: x * y = k holds or grows (the fee).
+pub fn prop_swap_keeps_k(_ amount_in: u64, _ reserve_in: u64, _ reserve_out: u64) -> bool {
+    let out = get_amount_out(amount_in, reserve_in, reserve_out)
+    let before = (reserve_in as u256) * (reserve_out as u256)
+    let after = ((reserve_in as u256) + (amount_in as u256)) *
+        ((reserve_out as u256) - (out as u256))
+    after >= before
+}
+
+/// Paying more never buys less.
+pub fn prop_more_in_never_less_out(
+    _ amount_in: u64,
+    _ reserve_in: u64,
+    _ reserve_out: u64,
+) -> bool {
+    amount_in == u64::max()
+        || get_amount_out(amount_in, reserve_in, reserve_out)
+            <= get_amount_out(amount_in + 1, reserve_in, reserve_out)
+}
+
+// ------------------------------------------------------------- hand-written tests
+
+#[test]
+fn quote_on_a_balanced_pool() {
+    // 1000 in against 1,000,000 / 1,000,000: 996 out after the fee
+    assert(get_amount_out(1000, 1000000, 1000000) == 996)
+}
+
+#[test]
+fn empty_pool_quotes_nothing() {
+    assert(get_amount_out(1000, 0, 1000000) == 0)
+}
