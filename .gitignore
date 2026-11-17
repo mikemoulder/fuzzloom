@@ -40,7 +40,6 @@ Thumbs.db
 !CONTRIBUTING.md
 !SECURITY.md
 !CHANGELOG.md
-!SUBMISSION.md
 
 # Fe debugging reports (fe build/test --report)
 *.tar.gz

@@ -22,7 +22,6 @@
   <a href="examples/vault-math">vault-math example</a> ·
   <a href="examples/token-ledger">token-ledger example</a> ·
   <a href="examples/amm-swap">amm-swap example</a> ·
-  <a href="SUBMISSION.md">Contest submission</a> ·
   <a href="CHANGELOG.md">Changelog</a> ·
   <a href="CONTRIBUTING.md">Contributing</a>
 </p>
