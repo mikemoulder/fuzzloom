@@ -49,3 +49,9 @@ examples/*/.fuzzloom/failures/
 
 # CI output (scripts/ci.sh)
 reports/
+
+# CLI build output and the library copy bundled at pack time
+packages/cli/dist/
+packages/cli/ingot/
+packages/cli/LICENSE
+*.tgz

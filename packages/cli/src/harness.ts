@@ -6,13 +6,26 @@
 // round into one harness. Dependency paths are relative: fe 26.6.0 rejects
 // absolute ones.
 
-import { mkdirSync, rmSync, writeFileSync } from "node:fs";
+import { existsSync, mkdirSync, rmSync, writeFileSync } from "node:fs";
 import { join, relative, resolve } from "node:path";
 import type { Target, Words } from "./types.ts";
 
 /** The Fuzzloom library ingot shipped with this CLI. */
+/**
+ * Where the Fe library ingot lives: FUZZLOOM_INGOT if set, else the
+ * repository checkout (ingots/fuzzloom, when running inside the repo, so a
+ * stale bundled copy never shadows the live library), else the copy bundled
+ * into an installed package (package/ingot, next to dist/).
+ */
 export function libraryIngot(): string {
-  return process.env.FUZZLOOM_INGOT ?? resolve(import.meta.dirname, "../../../ingots/fuzzloom");
+  if (process.env.FUZZLOOM_INGOT) return resolve(process.env.FUZZLOOM_INGOT);
+  const candidates = [
+    resolve(import.meta.dirname, "../../../ingots/fuzzloom"),
+    resolve(import.meta.dirname, "../ingot"),
+  ];
+  const found = candidates.find((c) => existsSync(join(c, "fe.toml")));
+  if (!found) throw new Error(`Fuzzloom's Fe library was not found (looked in ${candidates.join(", ")}); set FUZZLOOM_INGOT`);
+  return found;
 }
 
 /** 64-bit FNV-1a of a UTF-8 string: the property id fed to derive_seed. */

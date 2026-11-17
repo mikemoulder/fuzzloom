@@ -1,17 +1,41 @@
 {
-  "name": "@fuzzloom/cli",
+  "name": "fuzzloom",
   "version": "0.1.0",
   "description": "Property-based testing, fuzzing and native/EVM differential testing for Fe",
   "license": "Apache-2.0",
   "type": "module",
-  "bin": { "fuzzloom": "./src/index.ts" },
-  "engines": { "node": ">=22.18" },
+  "bin": {
+    "fuzzloom": "./dist/index.js"
+  },
+  "engines": {
+    "node": ">=22.18"
+  },
   "scripts": {
+    "build": "tsc -p tsconfig.build.json",
+    "prepack": "npm run build && node scripts/bundle-ingot.mjs",
     "test": "node --test \"test/**/*.test.ts\"",
     "typecheck": "tsc --noEmit"
   },
   "devDependencies": {
     "@types/node": "^22.10.0",
     "typescript": "^5.7.0"
-  }
+  },
+  "files": [
+    "dist",
+    "ingot",
+    "LICENSE",
+    "README.md"
+  ],
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/MikeMoulder/fuzzloom.git",
+    "directory": "packages/cli"
+  },
+  "keywords": [
+    "fe",
+    "fuzzing",
+    "property-based-testing",
+    "differential-testing",
+    "evm"
+  ]
 }
