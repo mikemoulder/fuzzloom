@@ -34,6 +34,9 @@ Thumbs.db
 # When README.md links a new .md file, add a matching !path line below.
 *.md
 !README.md
+!docs/guide.md
+!docs/architecture.md
+!docs/algorithms.md
 
 # Fe debugging reports (fe build/test --report)
 *.tar.gz
