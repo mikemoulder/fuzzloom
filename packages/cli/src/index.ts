@@ -29,7 +29,7 @@ Options:
   --seed <n>        base seed (default: random, printed so the run can be repeated)
   --runs <n>        inputs per property (default 10000; diff default 100000)
   --backend <b>     sonatina (EVM, default) or native
-  --only <name>     run only targets whose name contains this text
+  --only <name>     run only targets (or, for replay, saved failures) whose name contains this text
   --no-corpus       fuzz: skip the mutation campaigns seeded from saved failures
   --json            machine-readable output
   --junit <file>    fuzz, diff, replay: also write a JUnit XML report
@@ -336,7 +336,7 @@ async function reproduce(root: string, id: string, opts: Opts): Promise<number> 
 
 async function replayAll(root: string, opts: Opts): Promise<number> {
   const d = discover(root);
-  const records = listRecords(root);
+  const records = listRecords(root).filter((r) => !opts.only || r.target.includes(opts.only));
   const ctx: Context = { userRoot: root, ingot: d.ingot, backend: "sonatina", fe: defaultFeConfig(), onRun: progress(opts) };
   if (!opts.json) console.log(`${bold("fuzzloom replay")} ${d.ingot}  ${dim(`${records.length} saved failures`)}`);
   let failing = 0;
