@@ -6,8 +6,8 @@
 // harness holding every evaluation that does not depend on another. Rounds
 // on the two backends of a differential run execute concurrently.
 
-import { join } from "node:path";
 import { runBatch, type FeConfig } from "./fe.ts";
+import { safeDir } from "./paths.ts";
 import { caseName, writeBatch, type Case, type HarnessCall } from "./harness.ts";
 import type { Backend, Outcome, Target, Words } from "./types.ts";
 
@@ -40,8 +40,13 @@ export type PropertyResult =
   | { status: "aborted"; target: Target; iteration: bigint; original: Words; input: Words; abort: string; shrinkAborted: boolean; shrinkRounds: number; shrinkReplays: number; shrinkComplete: boolean; seededBy?: string; feRuns: number }
   | { status: "infra"; target: Target; reason: string; detail: string; feRuns: number };
 
+/**
+ * Where harnesses are generated, and what the cleanup deletes recursively.
+ * Refuses a `.fuzzloom` or `.fuzzloom/tmp` that is a symlink (see paths.ts),
+ * so neither writes nor the cleanup can reach outside the ingot.
+ */
 export function workDir(userRoot: string): string {
-  return join(userRoot, ".fuzzloom", "tmp");
+  return safeDir(userRoot, ".fuzzloom", "tmp");
 }
 
 /** An infrastructure outcome that ends the current recovery. */
