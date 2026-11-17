@@ -6,6 +6,8 @@
 //! without a matching decoder change. Inputs are always three words; words
 //! past `arity` are zero.
 
+use std::abi::DynArray
+
 /// The property failed. `original` is the first failing input and `shrunk`
 /// the smallest failing input found from it.
 #[error]
@@ -64,6 +66,18 @@ pub struct Generated {
 /// comparing backends.
 #[error]
 pub struct Digest { pub seed: u64, pub runs: u64, pub arity: u64, pub acc: u256 }
+
+/// Prefix digests from one pass: `accs[j]` is the digest after
+/// `first + j * step` runs. Lets the CLI decide a whole round of its
+/// divergence search with one test per backend instead of one per probe.
+#[error]
+pub struct Checkpoints {
+    pub seed: u64,
+    pub first: u64,
+    pub step: u64,
+    pub arity: u64,
+    pub accs: DynArray<u256>,
+}
 
 /// One differential target's output for one input, so the CLI can show
 /// exactly how two backends disagree on the first diverging input.

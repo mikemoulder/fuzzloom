@@ -4,8 +4,10 @@
 //! same `draw` stream properties use). The same harness built for sonatina
 //! and for native must produce the same digest. Digests are prefix-
 //! consistent: the first k folds are identical for any run count >= k, so on
-//! a mismatch the CLI bisects on `runs` to find the first input whose
-//! outputs differ, then recovers that input with `input_at`.
+//! a mismatch the CLI searches on `runs` for the first input whose outputs
+//! differ, then recovers that input with `target_input_at`. Checkpoints make
+//! that search cheap: one pass emits the prefix digests at many run counts,
+//! so a search round is one test per backend.
 //!
 //! The fold is order-sensitive FNV-style mixing over u256. It detects any
 //! single differing output word with overwhelming probability, but it is a
@@ -15,7 +17,9 @@ use ingot::rng::Rng
 use ingot::word::Word
 use ingot::input::{Bounds, Input}
 use ingot::draw::{draw, generated_at}
-use ingot::payload::{Digest, Evaluated, Generated}
+use ingot::payload::{Checkpoints, Digest, Evaluated, Generated}
+use std::abi::DynArray
+use core::MemVec
 use std::evm::revert_error
 
 const FOLD_PRIME: u256 = 0x100000001B3
@@ -136,6 +140,68 @@ pub fn digest<T: Target>(_ t: T, seed: u64, runs: u64) -> ! uses T::E {
     revert_error(Digest { seed, runs, arity: T::arity(), acc })
 }
 
+/// Most checkpoints one payload carries (8 KiB of digests).
+pub const MAX_CHECKPOINTS: u64 = 256
+
+/// Prefix digests of `t` at run counts `first + j * step` for j in
+/// 0..count, from a single pass over the first `first + (count - 1) * step`
+/// inputs.
+///
+/// Guarantee: element j equals `digest_within(t, bounds, seed, first + j *
+/// step)` exactly, because a digest's first k folds do not depend on the run
+/// count. Limit: the pass costs as much as the largest checkpoint's digest;
+/// `step` may be 0 (repeated checkpoints) and `count` 0 (empty).
+pub fn checkpoints_within<T: Target>(
+    _ t: T,
+    bounds: Bounds,
+    seed: u64,
+    first: u64,
+    step: u64,
+    count: u64,
+) -> MemVec<u256>
+uses T::E
+{
+    let arity = T::arity()
+    var rng = Rng::new(seed)
+    var acc: u256 = FOLD_OFFSET
+    var out: MemVec<u256> = MemVec::new()
+    var done: u64 = 0
+    var j: u64 = 0
+    while j < count {
+        let at = first + j * step
+        while done < at {
+            let x = draw(bounds, arity, mut rng)
+            acc = fold(acc, t.eval(x))
+            done += 1
+        }
+        out.push(acc)
+        j += 1
+    }
+    out
+}
+
+/// `checkpoints_within` over the default campaign bounds.
+pub fn checkpoints_of<T: Target>(_ t: T, seed: u64, first: u64, step: u64, count: u64) -> MemVec<
+    u256,
+>
+uses T::E
+{
+    checkpoints_within(t, bounds: T::full_bounds(), seed, first, step, count)
+}
+
+/// Harness entry point: end the test with the checkpoints of `t`. Panics
+/// (assertion) when `count` exceeds MAX_CHECKPOINTS, so an oversized request
+/// fails loudly instead of being truncated; the CLI never sends one.
+pub fn digest_checkpoints<T: Target>(_ t: T, seed: u64, first: u64, step: u64, count: u64) -> !
+uses T::E
+{
+    assert!(count <= MAX_CHECKPOINTS)
+    let accs = checkpoints_of(t, seed, first, step, count)
+    revert_error(
+        Checkpoints { seed, first, step, arity: T::arity(), accs: DynArray::from_mem_vec(accs) },
+    )
+}
+
 /// Harness entry point: the input the digest of `t` draws at `iteration`.
 pub fn target_input_at<T: Target>(_ t: T, seed: u64, iteration: u64) -> ! {
     let arity = T::arity()
@@ -238,4 +304,69 @@ fn digest_is_the_fold_of_the_generated_inputs() {
         i += 1
     }
     assert!(acc == digest_of(t, seed: 3, runs: 50))
+}
+
+/// Checkpoints as the payload carries them, for tests.
+fn checkpoints_payload<T: Target>(_ t: T, seed: u64, first: u64, step: u64, count: u64) -> DynArray<
+    u256,
+>
+uses T::E
+{
+    DynArray::from_mem_vec(checkpoints_of(t, seed, first, step, count))
+}
+
+fn at(_ a: DynArray<u256>, _ j: u64) -> u256 {
+    a.get(j.downcast_truncate())
+}
+
+#[test]
+fn every_checkpoint_equals_the_digest_at_its_run_count() {
+    // The stated guarantee, element by element, including a first checkpoint
+    // at zero runs (the offset) and a multi-argument target.
+    let t = target2(|x: u64, y: u64| x.wrapping_mul(y) ^ (x >> 3))
+    let cps = checkpoints_payload(t, seed: 11, first: 0, step: 37, count: 30)
+    assert!(cps.len() == 30)
+    var j: u64 = 0
+    while j < 30 {
+        assert!(at(cps, j) == digest_of(t, seed: 11, runs: j * 37))
+        j += 1
+    }
+}
+
+#[test]
+fn checkpoints_locate_the_first_differing_output() {
+    // A target that differs from the identity only on inputs above 2^63.
+    // Checkpoint digests agree before the first such input and differ at and
+    // after it, which is the monotonicity the CLI search relies on.
+    let a = target1(|x: u64| x)
+    let b = target1(|x: u64| if x > 0x8000000000000000 { x - 1 } else { x })
+    let ca = checkpoints_payload(a, seed: 5, first: 1, step: 1, count: 64)
+    let cb = checkpoints_payload(b, seed: 5, first: 1, step: 1, count: 64)
+    var first_bad: u64 = 64
+    var j: u64 = 0
+    while j < 64 {
+        let differs = at(ca, j) != at(cb, j)
+        if first_bad == 64 && differs {
+            first_bad = j
+        }
+        assert!(differs == (first_bad <= j))
+        j += 1
+    }
+    assert!(first_bad < 64)
+    // Checkpoint j covers inputs 0..=j, so the first differing input is j.
+    let x = target_generated_at(a, seed: 5, iteration: first_bad)
+    assert!(x.w0 > 0x8000000000000000)
+}
+
+#[test]
+fn zero_step_and_zero_count_are_well_defined() {
+    let t = target1(|x: u8| x)
+    let rep = checkpoints_payload(t, seed: 2, first: 9, step: 0, count: 3)
+    assert!(rep.len() == 3)
+    assert!(
+        at(rep, 0) == at(rep, 2) && at(rep, 0) == digest_of(t, seed: 2, runs: 9),
+    )
+    assert!(
+        checkpoints_payload(t, seed: 2, first: 9, step: 4, count: 0).len() == 0,
+    )
 }

@@ -14,7 +14,7 @@ pub use shrink::{
     gcd_of_distances,
     SWEEP,
 }
-pub use payload::{Counterexample, Passed, Replayed, Generated, Digest, Evaluated}
+pub use payload::{Counterexample, Passed, Replayed, Generated, Digest, Checkpoints, Evaluated}
 pub use check::{
     Report,
     find,
@@ -38,6 +38,9 @@ pub use diff::{
     digest_within,
     digest_of,
     digest,
+    checkpoints_of,
+    digest_checkpoints,
+    MAX_CHECKPOINTS,
     target_input_at,
     target_generated_at,
     evaluate,
