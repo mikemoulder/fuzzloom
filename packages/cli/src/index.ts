@@ -126,6 +126,14 @@ function list(root: string, opts: Opts): number {
   for (const t of d.targets) {
     const sig = t.args.map((a) => `${a.name}: ${a.type}`).join(", ");
     console.log(`  ${t.kind === "property" ? "prop" : "diff"}  ${t.name}(${sig})${t.returns ? ` -> ${t.returns}` : ""}  ${dim(`${t.file}:${t.line}`)}`);
+    if (t.effects?.length) console.log(dim(`        uses ${t.effects.map((e) => `${e.mut ? "mut " : ""}${e.type} <- ${e.fixture}()`).join(", ")}`));
+    for (const b of t.bounds ?? []) {
+      const a = t.args[b.arg]!;
+      // A signed range is zigzag words 0..=W: -k..=k for W = 2k, -(k+1)..=k for W = 2k + 1.
+      const k = b.hi / 2n;
+      const range = a.type.startsWith("i") ? `${b.hi % 2n === 0n ? -k : -(k + 1n)}..=${k}` : `${b.lo}..=${b.hi}`;
+      console.log(dim(`        ${a.name} in ${range}`));
+    }
   }
   for (const s of d.skipped) console.log(`  ${yellow("skip")}  ${s.name}  ${dim(`${s.file}:${s.line}`)}  ${s.reason}`);
   return 0;
