@@ -1,0 +1,50 @@
+pub struct Ledger { pub balance: u256, pub fee_bps: u256 }
+
+/// Fixture: a fresh ledger for every evaluation.
+pub fn fixture_ledger() -> Ledger {
+    Ledger { balance: 1000, fee_bps: 30 }
+}
+
+/// Effectful code under test: reads and mutates the ledger.
+pub fn withdraw(_ amount: u256) -> bool uses (ledger: mut Ledger) {
+    if amount > ledger.balance + 1 {   // planted off-by-one
+        return false
+    }
+    ledger.balance = ledger.balance - amount
+    true
+}
+
+/// A property that uses the effect.
+pub fn prop_withdraw_keeps_balance(_ amount: u64) -> bool uses (ledger: mut Ledger) {
+    let before = ledger.balance
+    if !withdraw(amount as u256) { return true }
+    ledger.balance <= before
+}
+
+pub fn fixture_small() -> Ledger {
+    Ledger { balance: 100, fee_bps: 30 }
+}
+
+/// Fails only through the effect: withdraw admits balance + 1.
+pub fn prop_never_overdraws(_ amount: u8) -> bool uses (ledger: mut Ledger) {
+    let before = ledger.balance
+    !withdraw(amount as u256) || (amount as u256) <= before
+}
+
+/// True only if every evaluation sees a fresh ledger.
+pub fn prop_sees_fresh_state(_ x: u8) -> bool uses (ledger: mut Ledger) {
+    let fresh = ledger.balance == 100
+    ledger.balance = 0
+    fresh
+}
+
+use ingot::config::{Config, Clock}
+
+/// Two effects, one read-only, labelled argument, trait effect.
+pub fn prop_capped(amount: u16) -> bool uses (ledger: mut Ledger, cfg: Config, clock: Clock) {
+    if clock.now() == 0 { return false }
+    let a = amount as u256
+    if a > cfg.cap { return true }
+    ledger.balance = ledger.balance + a
+    ledger.balance <= 100 + cfg.cap
+}

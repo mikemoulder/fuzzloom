@@ -1,0 +1,17 @@
+use fuzzloom::*
+use ledger::{Ledger, fixture_small, prop_capped}
+use ledger::config::{Config, Clock, fixture_config, fixture_clock}
+
+#[test]
+fn case_0() {
+    check(
+        prop1(|a0: u16| {
+            var e0 = fixture_small()
+            var e1 = fixture_config()
+            var e2 = fixture_clock()
+            with (Ledger = e0, Config = e1, Clock = e2) { prop_capped(amount: a0) }
+        }),
+        seed: 1,
+        runs: 2000,
+    )
+}

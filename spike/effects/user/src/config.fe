@@ -1,0 +1,21 @@
+pub struct Config { pub cap: u256 }
+
+pub trait Clock {
+    fn now(self) -> u64
+}
+
+pub struct FixedClock { pub t: u64 }
+
+impl Clock for FixedClock {
+    fn now(self) -> u64 {
+        self.t
+    }
+}
+
+pub fn fixture_config() -> Config {
+    Config { cap: 500 }
+}
+
+pub fn fixture_clock() -> FixedClock {
+    FixedClock { t: 1700000000 }
+}

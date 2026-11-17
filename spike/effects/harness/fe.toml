@@ -1,0 +1,7 @@
+[ingot]
+name = "h"
+version = "0.1.0"
+
+[dependencies]
+fuzzloom = { path = "../../../ingots/fuzzloom" }
+ledger = { path = "../user" }
