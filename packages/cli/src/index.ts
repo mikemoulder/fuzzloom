@@ -11,14 +11,16 @@ import type { Case } from "./harness.ts";
 import { listRecords, loadRecord, makeRecord, recordWords, saveRecord, type FailureRecord } from "./store.ts";
 import { bold, dim, formatResult, green, red, toJson, values, yellow } from "./report.ts";
 import { wordToValue } from "./abi.ts";
+import { checks } from "./doctor.ts";
 import { junitXml, type JUnitCase, type JUnitOutcome } from "./junit.ts";
-import { writeFileSync } from "node:fs";
+import { existsSync, writeFileSync } from "node:fs";
 import type { Discovery } from "./discover.ts";
 import type { Backend, Outcome, Target } from "./types.ts";
 
 const USAGE = `fuzzloom <command> [path] [options]
 
 Commands:
+  doctor    [path]              check fe, the native backend, the Fe library and the project
   list      [path]              show the prop_* and diff_* functions found
   fuzz      [path]              run every property campaign
   reproduce <id> [path]         replay one saved failure from its stored input
@@ -66,6 +68,7 @@ async function main(argv: string[]): Promise<number> {
   if (opts.backend !== "sonatina" && opts.backend !== "native") throw new Error(`unknown backend ${opts.backend}`);
   const pathArg = (i: number) => resolve(positionals[i] ?? ".");
   switch (command) {
+    case "doctor": return doctor(positionals[1] ? pathArg(1) : undefined, opts);
     case "list": return list(pathArg(1), opts);
     case "fuzz": return fuzz(pathArg(1), opts);
     case "diff": return diff(pathArg(1), opts);
@@ -79,6 +82,21 @@ async function main(argv: string[]): Promise<number> {
       console.error(`unknown command ${command}\n\n${USAGE}`);
       return 2;
   }
+}
+
+function doctor(root: string | undefined, opts: Opts): number {
+  const cs = checks(root ?? (existsSync(resolve("fe.toml")) ? resolve(".") : undefined));
+  if (opts.json) {
+    console.log(JSON.stringify(cs, null, 2));
+  } else {
+    const width = Math.max(...cs.map((c) => c.name.length));
+    for (const c of cs) {
+      const tag = c.level === "ok" ? green("ok  ") : c.level === "warn" ? yellow("warn") : red("FAIL");
+      console.log(`${tag}  ${c.name.padEnd(width)}  ${c.detail}`);
+      if (c.fix) console.log(dim(`      ${" ".repeat(width)}  ${c.fix}`));
+    }
+  }
+  return cs.some((c) => c.level === "fail") ? 2 : 0;
 }
 
 function list(root: string, opts: Opts): number {

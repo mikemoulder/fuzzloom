@@ -171,6 +171,17 @@ export async function runHarness(dir: string, backend: Backend, cfg: FeConfig = 
   return { outcome: r.outcomes[0]!, output: r.output, ms: r.ms };
 }
 
+/**
+ * The fe version the native backend would use: the same binary on
+ * Linux/macOS, fe inside WSL on Windows. Undefined when it cannot run.
+ */
+export function nativeFeVersion(cfg: FeConfig = defaultFeConfig()): string | undefined {
+  if (!viaWsl("native")) return feVersion(cfg) === "unknown" ? undefined : feVersion(cfg);
+  const r = wsl(cfg, ["bash", "-lc", `${cfg.wslBin} --version`]);
+  const out = String(r.stdout ?? "").trim();
+  return r.status === 0 && out.startsWith("fe ") ? out : undefined;
+}
+
 /** The fe version string, e.g. "fe 26.6.0 (5b3f96a)". */
 export function feVersion(cfg: FeConfig = defaultFeConfig()): string {
   const r = spawnSync(cfg.bin, ["--version"], { encoding: "utf8" });
