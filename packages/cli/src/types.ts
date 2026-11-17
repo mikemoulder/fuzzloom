@@ -14,11 +14,26 @@ export const FE_TYPES: readonly FeType[] = [
   "bool",
 ];
 
+/**
+ * An effect a target declares (`uses (name: mut T)`), provided per
+ * evaluation by a fixture function from the user's ingot.
+ */
+export type Effect = { type: string; mut: boolean; fixture: string };
+
 /** A `prop_*` or `diff_*` function found in a user ingot. */
 export type Target = {
   kind: "property" | "differential";
   name: string;
-  args: { name: string; type: FeType }[];
+  /**
+   * `label` is how the argument is passed when Fuzzloom calls the function
+   * directly (effectful targets): null for positional (`_ x`), else the
+   * label (the parameter name unless one is given).
+   */
+  args: { name: string; type: FeType; label?: string | null }[];
+  /** Fe paths the harness imports for this target (the function, effect types, fixtures). Defaults to `<ingot>::<name>`. */
+  imports?: string[];
+  /** Effects, each with the fixture that builds a fresh value per evaluation. */
+  effects?: Effect[];
   /** Return type for differential targets. */
   returns?: FeType;
   file: string;

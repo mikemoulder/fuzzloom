@@ -3,7 +3,7 @@ import assert from "node:assert/strict";
 import { mkdtempSync, readFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join, resolve } from "node:path";
-import { caseName, fnv1a64, harnessBody, writeBatch, writeHarness, type Case } from "../src/harness.ts";
+import { callable, caseName, fnv1a64, harnessBody, writeBatch, writeHarness, type Case } from "../src/harness.ts";
 import { runBatch, runHarness } from "../src/fe.ts";
 import { discover } from "../src/discover.ts";
 import type { Target, Words } from "../src/types.ts";
@@ -152,5 +152,42 @@ test("integration: real checkpoints equal separate digests, on both backends", a
     if (c.kind !== "checkpoints") continue;
     assert.equal(c.accs.length, 5);
     assert.deepEqual(c.accs, r.outcomes.slice(1).map((o) => (o.kind === "digest" ? o.acc : -1n)), backend);
+  }
+});
+
+test("an effectful target becomes a closure that builds fresh fixtures", () => {
+  const t: Target = {
+    ...two,
+    args: [{ name: "x", type: "u8", label: null }, { name: "y", type: "u16", label: "at" }],
+    effects: [{ type: "Ledger", mut: true, fixture: "fixture_ledger" }, { type: "Clock", mut: false, fixture: "fixture_clock" }],
+  };
+  const c = callable(t);
+  assert.ok(c.startsWith("prop2(|a0: u8, a1: u16| {"), c);
+  assert.ok(c.includes("var e0 = fixture_ledger()") && c.includes("var e1 = fixture_clock()"), c);
+  assert.ok(c.includes("with (Ledger = e0, Clock = e1) { prop_w(a0, at: a1) }"), c);
+  assert.equal(callable(two), "prop2(prop_w)");
+});
+
+test("integration: effectful targets run through fe on both backends", async () => {
+  // Real fixtures, real with-blocks: the transfer property aborts (planted
+  // fee underflow) at amount 0, the overdraft property passes, the fee quote
+  // evaluates identically on both backends.
+  const root = resolve(import.meta.dirname, "../../../examples/token-ledger");
+  const d = discover(root);
+  const by = (n: string) => d.targets.find((x) => x.name === n)!;
+  const work = mkdtempSync(join(tmpdir(), "fuzzloom-"));
+  const cases: Case[] = [
+    { target: by("prop_transfer_conserves_supply"), call: { mode: "replay", input: [0n, 0n, 0n] } },
+    { target: by("prop_transfer_conserves_supply"), call: { mode: "replay", input: [10000n, 1n, 0n] } },
+    { target: by("prop_overdraft_changes_nothing"), call: { mode: "check", base: 7n, runs: 500n } },
+    { target: by("diff_fee_quote"), call: { mode: "evaluate", input: [1000000n, 0n, 0n] } },
+  ];
+  for (const backend of ["sonatina", "native"] as const) {
+    const dir = writeBatch({ userRoot: root, ingot: d.ingot, cases, workDir: work, name: `fx-${backend}` });
+    const r = await runBatch(dir, cases.map((_, i) => caseName(i)), backend);
+    assert.deepEqual(r.outcomes[0], { kind: "panic", code: 17n, reason: "arithmetic overflow or underflow" }, backend);
+    assert.deepEqual(r.outcomes[1], { kind: "replayed", arity: 2, input: [10000n, 1n, 0n], failed: false }, backend);
+    assert.equal(r.outcomes[2]!.kind, "passed", backend);
+    assert.deepEqual(r.outcomes[3], { kind: "evaluated", arity: 1, input: [1000000n, 0n, 0n], output: 2500n }, backend);
   }
 });

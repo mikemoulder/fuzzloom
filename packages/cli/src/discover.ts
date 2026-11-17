@@ -3,7 +3,9 @@
 // Convention (no configuration):
 //   pub fn prop_<name>(args) -> bool   property, 1 to 3 arguments
 //   pub fn diff_<name>(args) -> T      differential target, 1 to 3 arguments
-// Arguments and T must be u8..u256, i8..i256 or bool. Anything else that
+// Arguments and T must be u8..u256, i8..i256 or bool. A target may use
+// effects (`uses (name: mut T)`) when the ingot provides a fixture for each
+// (see discover). Anything else that
 // matches the naming convention is reported as skipped, with the reason,
 // so a typo or an unsupported signature is never silently ignored.
 
@@ -36,18 +38,61 @@ const PARAM = /^(?:(own|mut)\s+)?(?:(\w+)\s+)?(\w+)\s*:\s*(?:(own|mut)\s+)?([\w:
 
 const isFeType = (t: string): t is FeType => (FE_TYPES as readonly string[]).includes(t);
 
-/** Finds targets in one source text. */
-export function discoverSource(src: string, file: string): { targets: Target[]; skipped: Skipped[] } {
+/** An effect as written in a `uses` clause, before its fixture is resolved. */
+export type EffectSpec = { type: string; mut: boolean };
+
+const EFFECT_ITEM = /^(?:\w+\s*:\s*)?(mut\s+)?([\w:]+)$/;
+
+/** Parses `uses (a: mut A, b: B)`, `uses (A)` or `uses A`. Undefined when the clause cannot be read. */
+export function parseUses(clause: string): EffectSpec[] | undefined {
+  const body = clause.trim().replace(/^uses\s*/, "").trim();
+  const inner = body.startsWith("(") && body.endsWith(")") ? body.slice(1, -1) : body;
+  const items = inner.split(",").map((x) => x.trim()).filter(Boolean);
+  const out: EffectSpec[] = [];
+  for (const it of items) {
+    const m = it.match(EFFECT_ITEM);
+    if (!m) return undefined;
+    out.push({ type: m[2]!, mut: Boolean(m[1]) });
+  }
+  return out.length ? out : undefined;
+}
+
+/** A target found in one file, with its effects still unresolved. */
+export type RawTarget = Target & { uses?: EffectSpec[] };
+
+const FIXTURE = /\bpub\s+fn\s+(fixture_\w+)\s*\(\s*\)\s*->\s*([\w:]+)/g;
+const TYPE_DEF = /\bpub\s+(?:struct|enum|trait)\s+(\w+)/g;
+const USE_GROUP = /\buse\s+([\w:]+)::\{([^}]*)\}/g;
+const USE_ONE = /\buse\s+([\w:]+)::(\w+)\s*(?:\n|$)/g;
+
+/** Fixtures, public types and `use` imports declared in one source text. */
+export function declarations(src: string): { fixtures: { name: string; returns: string }[]; types: string[]; uses: Map<string, string> } {
   const clean = stripComments(src);
-  const targets: Target[] = [];
+  const fixtures = [...clean.matchAll(FIXTURE)].map((m) => ({ name: m[1]!, returns: m[2]! }));
+  const types = [...clean.matchAll(TYPE_DEF)].map((m) => m[1]!);
+  const uses = new Map<string, string>();
+  for (const m of clean.matchAll(USE_GROUP)) {
+    for (const item of m[2]!.split(",").map((x) => x.trim()).filter(Boolean)) {
+      if (/^\w+$/.test(item)) uses.set(item, `${m[1]}::${item}`);
+    }
+  }
+  for (const m of clean.matchAll(USE_ONE)) uses.set(m[2]!, `${m[1]}::${m[2]}`);
+  return { fixtures, types, uses };
+}
+
+/** Finds targets in one source text. */
+export function discoverSource(src: string, file: string): { targets: RawTarget[]; skipped: Skipped[] } {
+  const clean = stripComments(src);
+  const targets: RawTarget[] = [];
   const skipped: Skipped[] = [];
   for (const m of clean.matchAll(SIGNATURE)) {
-    const [, name = "", generics, params = "", ret, uses] = m;
+    const [, name = "", generics, params = "", ret, usesClause] = m;
     const line = clean.slice(0, m.index).split("\n").length;
     const kind = name.startsWith("prop_") ? "property" : "differential";
     const skip = (reason: string) => skipped.push({ name, file, line, reason });
     if (generics) { skip("generic functions are not supported; wrap it in a concrete function"); continue; }
-    if (uses) { skip("functions with effects (uses ...) are not supported yet"); continue; }
+    const uses = usesClause ? parseUses(usesClause) : undefined;
+    if (usesClause && !uses) { skip(`cannot read the effect clause "${usesClause.trim()}"`); continue; }
     const parts = params.split(",").map((p) => p.trim()).filter((p) => p.length > 0);
     if (parts.length < 1 || parts.length > 3) { skip(`takes ${parts.length} arguments; Fuzzloom supports 1 to 3`); continue; }
     const args: Target["args"] = [];
@@ -57,20 +102,20 @@ export function discoverSource(src: string, file: string): { targets: Target[]; 
       if (!pm) { bad = `cannot parse parameter "${p}"`; break; }
       const [, , label, argName = "", mode, type = ""] = pm;
       if (mode) { bad = `parameter "${argName}" is passed as ${mode}; use a plain value parameter`; break; }
-      // Labels (`_ x`, `x`, or `label x`) do not matter: a function item is
-      // passed as an Fn value and called positionally either way (verified
-      // against fe 26.6.0).
-      void label;
       if (!isFeType(type)) { bad = `parameter "${argName}" has type ${type}; supported: ${FE_TYPES.join(", ")}`; break; }
-      args.push({ name: argName, type });
+      // Labels matter only when Fuzzloom calls the function directly (an
+      // effectful target, wrapped in a closure); a function item passed as an
+      // Fn value is called positionally (verified against fe 26.6.0).
+      args.push({ name: argName, type, label: label === "_" ? null : (label ?? argName) });
     }
     if (bad) { skip(bad); continue; }
+    const extra = uses ? { uses } : {};
     if (kind === "property") {
       if (ret !== "bool") { skip(`properties must return bool, found ${ret ?? "nothing"}`); continue; }
-      targets.push({ kind, name, args, file, line });
+      targets.push({ kind, name, args, file, line, ...extra });
     } else {
       if (!ret || !isFeType(ret)) { skip(`differential targets must return an integer or bool, found ${ret ?? "nothing"}`); continue; }
-      targets.push({ kind, name, args, returns: ret, file, line });
+      targets.push({ kind, name, args, returns: ret, file, line, ...extra });
     }
   }
   return { targets, skipped };
@@ -86,17 +131,71 @@ function feFiles(dir: string): string[] {
   return out.sort();
 }
 
-/** Finds every target in the ingot rooted at `root`. */
+/** The Fe module path of a source file: src/lib.fe is the ingot root, src/a/b.fe is `<ingot>::a::b`. */
+export function modulePath(ingot: string, srcDir: string, file: string): string {
+  const rel = relative(srcDir, file).split("\\").join("/").replace(/\.fe$/, "");
+  return rel === "lib" ? ingot : `${ingot}::${rel.split("/").join("::")}`;
+}
+
+const snake = (t: string) => t.replace(/([a-z0-9])([A-Z])/g, "$1_$2").toLowerCase();
+
+/**
+ * Finds every target in the ingot rooted at `root`. A target with effects
+ * needs, for each effect type T, exactly one `pub fn fixture_*() -> T` in the
+ * ingot, or else exactly one `pub fn fixture_<t_in_snake_case>()` (for a trait
+ * effect implemented by a concrete type). T must be defined in the ingot or
+ * imported by a `use` in the target's file. Otherwise the target is skipped
+ * with the reason.
+ */
 export function discover(root: string): Discovery {
   const ingot = ingotName(root);
   const src = join(root, "src");
   if (!existsSync(src)) throw new Error(`no src/ directory in ${root}`);
-  const targets: Target[] = [];
+  const raw: { t: RawTarget; mod: string; fileUses: Map<string, string> }[] = [];
   const skipped: Skipped[] = [];
+  const fixtures: { name: string; returns: string; path: string }[] = [];
+  const types = new Map<string, string>();
+  const local = (p: string) => p.replace(/^ingot::/, `${ingot}::`);
   for (const f of feFiles(src)) {
-    const r = discoverSource(readFileSync(f, "utf8"), relative(root, f).split("\\").join("/"));
-    targets.push(...r.targets);
+    const text = readFileSync(f, "utf8");
+    const mod = modulePath(ingot, src, f);
+    const d = declarations(text);
+    for (const fx of d.fixtures) fixtures.push({ ...fx, path: `${mod}::${fx.name}` });
+    for (const ty of d.types) if (!types.has(ty)) types.set(ty, `${mod}::${ty}`);
+    const fileUses = new Map([...d.uses].map(([k, v]) => [k, local(v)]));
+    const r = discoverSource(text, relative(root, f).split("\\").join("/"));
+    for (const t of r.targets) raw.push({ t, mod, fileUses });
     skipped.push(...r.skipped);
+  }
+  const targets: Target[] = [];
+  for (const { t: { uses, ...t }, mod, fileUses } of raw) {
+    const imports = [`${mod}::${t.name}`];
+    if (!uses) {
+      targets.push({ ...t, imports });
+      continue;
+    }
+    const effects: Target["effects"] = [];
+    let reason = "";
+    for (const u of uses) {
+      const short = u.type.split("::").pop()!;
+      let fx = fixtures.filter((x) => x.returns.split("::").pop() === short);
+      if (fx.length === 0) fx = fixtures.filter((x) => x.name === `fixture_${snake(short)}`);
+      if (fx.length !== 1) {
+        reason = fx.length === 0
+          ? `uses ${u.type}, but the ingot has no \`pub fn fixture_${snake(short)}() -> ${short}\` to build it`
+          : `uses ${u.type}, and more than one fixture builds it (${fx.map((x) => x.name).join(", ")})`;
+        break;
+      }
+      if (!u.type.includes("::")) {
+        const typePath = types.get(short) ?? fileUses.get(short);
+        if (!typePath) { reason = `uses ${u.type}, which is neither defined in the ingot nor imported in ${t.file}`; break; }
+        imports.push(typePath);
+      }
+      imports.push(fx[0]!.path);
+      effects.push({ type: u.type, mut: u.mut, fixture: fx[0]!.name });
+    }
+    if (reason) skipped.push({ name: t.name, file: t.file, line: t.line, reason });
+    else targets.push({ ...t, imports, effects });
   }
   const seen = new Map<string, Target>();
   for (const t of targets) {
