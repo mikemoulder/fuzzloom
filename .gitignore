@@ -61,3 +61,6 @@ packages/cli/dist/
 packages/cli/ingot/
 packages/cli/LICENSE
 *.tgz
+
+# Local Claude Code skills (third-party, never committed)
+.claude/
