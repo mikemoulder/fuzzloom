@@ -1,6 +1,6 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
-import { chooseWidth, roundsFor, searchFirst, shrinkByReplay, shrinkCandidates } from "../src/engine.ts";
+import { checkpointCall, chooseWidth, MAX_CHECKPOINTS, narrow, probePoints, roundsFor, searchFirst, shrinkByReplay, shrinkCandidates } from "../src/engine.ts";
 import type { Target, Words } from "../src/types.ts";
 
 const t2: Target = { kind: "property", name: "p", args: [{ name: "a", type: "u64" }, { name: "b", type: "u64" }], file: "f", line: 1 };
@@ -36,6 +36,48 @@ test("searchFirst finds the exact minimum within the stated round bound", async 
       }
     }
   }
+});
+
+test("probePoints is an evenly spaced progression whose gaps meet the roundsFor bound", () => {
+  for (const width of [1, 3, 21, 255, 256]) {
+    for (const [lo, hi] of [[1n, 2n], [1n, 40n], [5n, 300n], [1n, 10000n], [1n, 1n << 40n]] as const) {
+      const ks = probePoints(lo, hi, width);
+      const u = hi - lo;
+      assert.ok(ks.length >= 1 && ks.length <= width);
+      assert.ok(ks.every((k) => k >= lo && k < hi));
+      checkpointCall(0n, ks.length <= MAX_CHECKPOINTS ? ks : ks.slice(0, MAX_CHECKPOINTS)); // throws unless evenly spaced
+      // Undecided values left in every gap, including below the lowest probe and above the highest.
+      const edges = [lo - 1n, ...ks, hi];
+      for (let i = 1; i < edges.length; i++) {
+        const gap = edges[i]! - edges[i - 1]! - 1n;
+        assert.ok(gap <= u / BigInt(width + 1), `width ${width}, [${lo}, ${hi}): gap ${gap}`);
+      }
+    }
+  }
+  assert.deepEqual(probePoints(3n, 6n, 8), [3n, 4n, 5n]); // a small range probes every value
+});
+
+test("narrow keeps exactly the undecided values", () => {
+  const ks = [10n, 20n, 30n];
+  assert.deepEqual(narrow(1n, 40n, ks, [false, true, true]), { lo: 11n, hi: 20n });
+  assert.deepEqual(narrow(1n, 40n, ks, [true, true, true]), { lo: 1n, hi: 10n });
+  assert.deepEqual(narrow(1n, 40n, ks, [false, false, false]), { lo: 31n, hi: 40n });
+});
+
+test("the first diff round fits one checkpoint case and leaves at most 39 of 10,000 run counts", () => {
+  // Same construction as runDiffs: the first search round's probes plus runs itself.
+  const runs = 10000n;
+  const ks = [...probePoints(1n, runs, MAX_CHECKPOINTS - 1), runs];
+  const call = checkpointCall(7n, ks);
+  assert.ok(call.mode === "checkpoints" && call.count <= MAX_CHECKPOINTS && call.step === 40n);
+  assert.equal(ks.at(-1), runs);
+  for (const answer of [1n, 2n, 39n, 40n, 41n, 5000n, 9999n, 10000n]) {
+    const r = narrow(1n, runs, ks, ks.map((k) => k >= answer));
+    assert.ok(r.lo <= answer && answer <= r.hi && r.hi - r.lo <= 39n, `answer ${answer}: [${r.lo}, ${r.hi}]`);
+    assert.equal(roundsFor(r.hi - r.lo, MAX_CHECKPOINTS), r.hi === r.lo ? 0 : 1);
+  }
+  assert.throws(() => checkpointCall(0n, [1n, 2n, 4n]), /evenly spaced/);
+  assert.throws(() => checkpointCall(0n, []), /cannot checkpoint/);
 });
 
 test("roundsFor and chooseWidth: bisection is the width-1 case, and wider rounds cut fe runs", () => {

@@ -24,6 +24,8 @@ test("harness bodies for every mode", () => {
     `input_at(prop2(prop_w), bounds: bounds_of(prop2(prop_w)), seed: derive_seed(7, ${id}), iteration: 41)`);
   const d: Target = { ...two, kind: "differential", returns: "u256" };
   assert.equal(harnessBody(d, { mode: "digest", base: 7n, runs: 5n }), `digest(target2(prop_w), seed: derive_seed(7, ${id}), runs: 5)`);
+  assert.equal(harnessBody(d, { mode: "checkpoints", base: 7n, first: 40n, step: 40n, count: 3 }),
+    `digest_checkpoints(target2(prop_w), seed: derive_seed(7, ${id}), first: 40, step: 40, count: 3)`);
   assert.equal(harnessBody(two, { mode: "replay_at", base: 7n, iteration: 3n }),
     `replay(prop2(prop_w), input: generated_at(bounds_of(prop2(prop_w)), arity: arity_of(prop2(prop_w)), seed: derive_seed(7, ${id}), iteration: 3))`);
   assert.equal(harnessBody(d, { mode: "evaluate_at", base: 7n, iteration: 3n }),
@@ -57,6 +59,7 @@ test("every library function the harness generator calls is exported", () => {
   const calls: Parameters<typeof harnessBody>[1][] = [
     { mode: "check", base: 1n, runs: 1n }, { mode: "replay", input: [1n, 2n, 3n] },
     { mode: "input_at", base: 1n, iteration: 1n }, { mode: "digest", base: 1n, runs: 1n },
+    { mode: "checkpoints", base: 1n, first: 1n, step: 1n, count: 1 },
     { mode: "target_input_at", base: 1n, iteration: 1n }, { mode: "evaluate", input: [1n, 2n, 3n] },
     { mode: "replay_at", base: 1n, iteration: 1n }, { mode: "evaluate_at", base: 1n, iteration: 1n },
   ];
@@ -98,4 +101,26 @@ test("integration: one batch harness answers every case by name, including the n
   assert.equal(g.kind, "generated");
   assert.equal(rep.kind, "replayed");
   if (g.kind === "generated" && rep.kind === "replayed") assert.deepEqual(rep.input, g.input);
+});
+
+test("integration: real checkpoints equal separate digests, on both backends", async () => {
+  // The decoder reads the DynArray tail from real fe output, and every
+  // checkpoint matches the digest a separate case computes for that run count.
+  const root = resolve(import.meta.dirname, "../../../examples/vault-math");
+  const d = discover(root);
+  const fee = d.targets.find((x) => x.name === "diff_fee")!;
+  const work = mkdtempSync(join(tmpdir(), "fuzzloom-"));
+  const cases: Case[] = [
+    { target: fee, call: { mode: "checkpoints", base: 7n, first: 0n, step: 25n, count: 5 } },
+    ...[0n, 25n, 50n, 75n, 100n].map((runs): Case => ({ target: fee, call: { mode: "digest", base: 7n, runs } })),
+  ];
+  for (const backend of ["sonatina", "native"] as const) {
+    const dir = writeBatch({ userRoot: root, ingot: d.ingot, cases, workDir: work, name: `cps-${backend}` });
+    const r = await runBatch(dir, cases.map((_, i) => caseName(i)), backend);
+    const c = r.outcomes[0]!;
+    assert.equal(c.kind, "checkpoints", JSON.stringify(c, (_, v) => typeof v === "bigint" ? v.toString() : v));
+    if (c.kind !== "checkpoints") continue;
+    assert.equal(c.accs.length, 5);
+    assert.deepEqual(c.accs, r.outcomes.slice(1).map((o) => (o.kind === "digest" ? o.acc : -1n)), backend);
+  }
 });

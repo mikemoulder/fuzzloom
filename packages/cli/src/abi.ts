@@ -12,6 +12,7 @@ export const SIGNATURES = {
   replayed: "Replayed(uint64,uint256,uint256,uint256,bool)",
   generated: "Generated(uint64,uint64,uint64,uint256,uint256,uint256)",
   digest: "Digest(uint64,uint64,uint64,uint256)",
+  checkpoints: "Checkpoints(uint64,uint64,uint64,uint64,uint256[])",
   evaluated: "Evaluated(uint64,uint256,uint256,uint256,uint256)",
   panic: "Panic(uint256)",
   error: "Error(string)",
@@ -72,6 +73,15 @@ export function decodePayload(hex: string): Outcome {
     case SELECTORS.digest:
       need(w, 4, "Digest");
       return { kind: "digest", seed: w[0]!, runs: w[1]!, arity: num(w[2]), acc: w[3]! };
+    case SELECTORS.checkpoints: {
+      need(w, 6, "Checkpoints");
+      // Standard ABI: the fifth head word is the byte offset of the array tail
+      // (length word, then the elements), counted from the end of the selector.
+      const at = Number(w[4]! / 32n);
+      const len = Number(w[at] ?? 0n);
+      need(w, at + 1 + len, "Checkpoints");
+      return { kind: "checkpoints", seed: w[0]!, first: w[1]!, step: w[2]!, arity: num(w[3]), accs: w.slice(at + 1, at + 1 + len) };
+    }
     case SELECTORS.evaluated:
       need(w, 5, "Evaluated");
       return { kind: "evaluated", arity: num(w[0]), input: triple(w, 1), output: w[4]! };

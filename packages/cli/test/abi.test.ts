@@ -9,6 +9,8 @@ test("selectors agree with ones the Fe compiler actually emitted", () => {
   assert.equal(selector("Counterexample(uint64,uint64,uint64,uint64)"), "0xf8e73c77");
   assert.equal(selector("Digest(uint64,uint256,uint64)"), "0xf028dfbb");
   assert.equal(selector("Counterexample(uint64,uint64)"), "0x203dec3a");
+  // A DynArray<u256> field is encoded as uint256[] (checkpoints spike).
+  assert.equal(selector("Cps(uint64,uint64,uint256[])"), "0x94dac8be");
 });
 
 const word = (n: bigint) => n.toString(16).padStart(64, "0");
@@ -31,6 +33,15 @@ test("decodes real Panic and Error(string) payloads", () => {
   assert.deepEqual(p, { kind: "panic", code: 18n, reason: "division or modulo by zero" });
   const e = decodePayload("0x08c379a00000000000000000000000000000000000000000000000000000000000000020000000000000000000000000000000000000000000000000000000000000000f70726f7065727479206661696c65640000000000000000000000000000000000");
   assert.deepEqual(e, { kind: "revert", message: "property failed" });
+});
+
+test("decodes a Checkpoints payload through its array offset", () => {
+  const sel = selector("Checkpoints(uint64,uint64,uint64,uint64,uint256[])");
+  // Head: seed, first, step, arity, offset 0xa0 (five words); tail: length 3, elements.
+  const hex = sel + [9n, 40n, 40n, 1n, 0xa0n, 3n, 11n, 22n, 33n].map(word).join("");
+  assert.deepEqual(decodePayload(hex), { kind: "checkpoints", seed: 9n, first: 40n, step: 40n, arity: 1, accs: [11n, 22n, 33n] });
+  // A tail shorter than its length word is rejected, not silently truncated.
+  assert.throws(() => decodePayload(sel + [9n, 40n, 40n, 1n, 0xa0n, 3n, 11n].map(word).join("")));
 });
 
 test("unknown selectors are infra, not results", () => {

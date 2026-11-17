@@ -20,7 +20,7 @@ export type Context = {
   onRun?: (what: string, ms: number) => void;
   /** fe runs (rounds) allowed when shrinking an aborting property (default 8). */
   abortShrinkRounds?: number;
-  /** Most cases in one search round (default 64). */
+  /** Most cases in one abort-search round (default 64). Divergence search uses checkpoints instead. */
   maxWidth?: number;
 };
 
@@ -113,29 +113,50 @@ export function chooseWidth(unknown: bigint, maxWidth = 64): number {
 }
 
 /**
+ * The probes of one search round over the undecided values [lo, hi), with
+ * hi known true: the arithmetic progression hi - s, hi - 2s, ... (returned
+ * ascending, at most `width` values, all >= lo), s = floor((hi - lo) /
+ * (width + 1)) + 1. Every gap between probes, and the one below the lowest,
+ * then holds at most floor((hi - lo) / (width + 1)) undecided values, which
+ * is the bound roundsFor counts. Being a progression lets one checkpoint
+ * case answer a whole round.
+ */
+export function probePoints(lo: bigint, hi: bigint, width: number): bigint[] {
+  if (width < 1) throw new Error("width must be at least 1");
+  const u = hi - lo;
+  if (u <= 0n) return [];
+  const W = BigInt(width);
+  const s = u / (W + 1n) + 1n;
+  const ks: bigint[] = [];
+  for (let j = 1n; j <= W && hi - j * s >= lo; j++) ks.unshift(hi - j * s);
+  return ks;
+}
+
+/** The undecided range left after probing ascending `ks` with results `res`. */
+export function narrow(lo: bigint, hi: bigint, ks: bigint[], res: boolean[]): { lo: bigint; hi: bigint } {
+  const t = res.findIndex((x) => x);
+  if (t >= 0) hi = ks[t]!;
+  const f = t >= 0 ? t - 1 : ks.length - 1;
+  if (f >= 0) lo = ks[f]! + 1n;
+  return { lo, hi };
+}
+
+/**
  * Finds the smallest k in [lo, hi] with pred(k), for a predicate that is
- * monotone (false then true) and known true at hi. Each round probes up to
- * `width` points that split the undecided range evenly, all in one call.
+ * monotone (false then true) and known true at hi. Each round probes the
+ * probePoints of the undecided range, all in one call.
  *
  * Guarantee: the exact minimum, in at most roundsFor(hi - lo, width) rounds.
  * Limit: if pred is not monotone the answer is some k with pred(k) and
  * !pred(k - 1), not necessarily the smallest.
  */
 export async function searchFirst(lo: bigint, hi: bigint, width: number, probe: (ks: bigint[]) => Promise<boolean[]>): Promise<{ value: bigint; rounds: number }> {
-  if (width < 1) throw new Error("width must be at least 1");
   let rounds = 0;
   while (lo < hi) {
-    const u = hi - lo;
-    const W = BigInt(width);
-    const ks: bigint[] = [];
-    if (u <= W) for (let k = lo; k < hi; k++) ks.push(k);
-    else for (let j = 1n; j <= W; j++) ks.push(lo + (j * u) / (W + 1n));
+    const ks = probePoints(lo, hi, width);
     const res = await probe(ks);
     rounds++;
-    const t = res.findIndex((x) => x);
-    if (t >= 0) hi = ks[t]!;
-    const f = t >= 0 ? t - 1 : ks.length - 1;
-    if (f >= 0) lo = ks[f]! + 1n;
+    ({ lo, hi } = narrow(lo, hi, ks, res));
   }
   return { value: hi, rounds };
 }
@@ -306,26 +327,50 @@ async function onBoth(ctx: Context, cases: Case[], label: string, meter?: Meter)
   return { s, n };
 }
 
-const digestOf = (o: Outcome, backend: Backend): bigint => {
-  if (o.kind === "digest") return o.acc;
+/** Most digests one checkpoint case returns (MAX_CHECKPOINTS in diff.fe). */
+export const MAX_CHECKPOINTS = 256;
+
+/** The checkpoints call answering ascending, evenly spaced run counts `ks`. */
+export function checkpointCall(base: bigint, ks: bigint[]): HarnessCall {
+  if (ks.length === 0 || ks.length > MAX_CHECKPOINTS) throw new Error(`cannot checkpoint ${ks.length} run counts`);
+  const step = ks.length > 1 ? ks[1]! - ks[0]! : 1n;
+  if (ks.some((k, j) => k !== ks[0]! + BigInt(j) * step)) throw new Error("checkpoint run counts must be evenly spaced");
+  return { mode: "checkpoints", base, first: ks[0]!, step, count: ks.length };
+}
+
+const accsOf = (o: Outcome, backend: Backend, count: number): bigint[] => {
+  if (o.kind === "checkpoints") {
+    if (o.accs.length === count) return o.accs;
+    throw new Stop("unparsed", `asked for ${count} checkpoints, got ${o.accs.length}`, backend);
+  }
   // An abort while digesting is about the target, not a backend difference.
-  throw o.kind === "infra" ? Stop.of(o, backend, "Digest") : new Stop("aborted", `${describeAbort(o)} while digesting`, backend);
+  if (o.kind === "panic" || o.kind === "revert") throw new Stop("aborted", `${describeAbort(o)} while digesting`, backend);
+  throw Stop.of(o, backend, "Checkpoints");
 };
 
 /**
- * Differential run of every target: one digest round for all of them on
- * sonatina and native concurrently, then localiseDivergence for each target
- * whose digests differ.
+ * Differential run of every target in one round on sonatina and native
+ * concurrently. Each target emits checkpoints at the first search round's
+ * probe points plus `runs` itself, so the round that checks agreement also
+ * narrows any divergence to a 1/256 slice of the run count. Targets whose
+ * checkpoints differ go to localiseDivergence.
  */
 export async function runDiffs(ctx: Context, targets: Target[], base: bigint, runs: bigint): Promise<DiffResult[]> {
   if (targets.length === 0) return [];
-  const first = await onBoth(ctx, targets.map((target) => ({ target, call: { mode: "digest", base, runs } })), "digest");
+  const ks = [...probePoints(1n, runs, MAX_CHECKPOINTS - 1), runs];
+  const first = await onBoth(ctx, targets.map((target) => ({ target, call: checkpointCall(base, ks) })), "digest");
   const out: DiffResult[] = [];
   for (const [i, target] of targets.entries()) {
     try {
-      const s = digestOf(first.s[i]!, "sonatina");
-      const n = digestOf(first.n[i]!, "native");
-      out.push(s === n ? { status: "agreed", target, runs, acc: s, feRuns: 2 } : await localiseDivergence(ctx, target, base, runs));
+      const s = accsOf(first.s[i]!, "sonatina", ks.length);
+      const n = accsOf(first.n[i]!, "native", ks.length);
+      // Any differing checkpoint proves a divergence, so all of them are
+      // compared, not only the full-run digest (a fold collision there would
+      // otherwise hide one).
+      const res = ks.map((_, j) => s[j] !== n[j]);
+      out.push(res.some((x) => x)
+        ? await localiseDivergence(ctx, target, base, narrow(1n, runs, ks, res))
+        : { status: "agreed", target, runs, acc: s[ks.length - 1]!, feRuns: 2 });
     } catch (e) {
       if (!(e instanceof Stop)) throw e;
       out.push({ status: "infra", target, backend: e.backend, reason: e.reason, detail: e.detail, feRuns: 2 });
@@ -335,22 +380,28 @@ export async function runDiffs(ctx: Context, targets: Target[], base: bigint, ru
 }
 
 /**
- * Finds the first input on which the two backends disagree. Digests are
- * prefix-consistent (the first k folds are identical for any run count
- * >= k), so "digests differ at k runs" is monotone in k and searchFirst
- * finds the first diverging input exactly. One last round evaluates that
- * input on both backends (target_input_at alongside, since evaluate may
- * abort). Infrastructure outcomes are reported as such, never as a
- * divergence.
+ * Finds the first input on which the two backends disagree, given the run
+ * counts [lo, hi] the first round left undecided (checkpoints known to
+ * differ at hi). Digests are prefix-consistent (the first k folds are
+ * identical for any run count >= k), so "digests differ at k runs" is
+ * monotone in k and searchFirst finds the first diverging input exactly;
+ * every search round is one checkpoint case per backend. One last round
+ * evaluates that input on both backends (target_input_at alongside, since
+ * evaluate may abort). Infrastructure outcomes are reported as such, never
+ * as a divergence.
+ *
+ * Cost: 2 * (1 + roundsFor(hi - lo, 256) + 1) fe runs of one case each. For
+ * 10,000 runs the first round leaves at most 39 values, so 6 fe runs.
  */
-export async function localiseDivergence(ctx: Context, target: Target, base: bigint, runs: bigint): Promise<DiffResult> {
+export async function localiseDivergence(ctx: Context, target: Target, base: bigint, range: { lo: bigint; hi: bigint }): Promise<DiffResult> {
   const meter: Meter = { feRuns: 2 };
   const label = (l: string) => `${target.name}-${l}`;
   try {
-    const width = chooseWidth(runs - 1n, ctx.maxWidth);
-    const found = await searchFirst(1n, runs, width, async (ks) => {
-      const r = await onBoth(ctx, ks.map((k) => ({ target, call: { mode: "digest", base, runs: k } })), label("search"), meter);
-      return ks.map((_, i) => digestOf(r.s[i]!, "sonatina") !== digestOf(r.n[i]!, "native"));
+    const found = await searchFirst(range.lo, range.hi, MAX_CHECKPOINTS, async (ks) => {
+      const r = await onBoth(ctx, [{ target, call: checkpointCall(base, ks) }], label("search"), meter);
+      const s = accsOf(r.s[0]!, "sonatina", ks.length);
+      const n = accsOf(r.n[0]!, "native", ks.length);
+      return ks.map((_, j) => s[j] !== n[j]);
     });
     const iteration = found.value - 1n;
     const r = await onBoth(ctx, [
@@ -362,7 +413,7 @@ export async function localiseDivergence(ctx: Context, target: Target, base: big
     const es = r.s[1]!, en = r.n[1]!;
     if (es.kind !== "evaluated") throw Stop.of(es, "sonatina", "Evaluated");
     if (en.kind !== "evaluated") throw Stop.of(en, "native", "Evaluated");
-    return { status: "diverged", target, iteration, input: g.input, outputs: { sonatina: es.output, native: en.output }, rounds: found.rounds, feRuns: meter.feRuns };
+    return { status: "diverged", target, iteration, input: g.input, outputs: { sonatina: es.output, native: en.output }, rounds: 1 + found.rounds, feRuns: meter.feRuns };
   } catch (e) {
     if (!(e instanceof Stop)) throw e;
     return { status: "infra", target, backend: e.backend, reason: e.reason, detail: e.detail, feRuns: meter.feRuns };

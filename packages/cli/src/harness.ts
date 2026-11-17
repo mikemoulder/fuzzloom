@@ -30,6 +30,8 @@ export type HarnessCall =
   | { mode: "replay"; input: Words }
   | { mode: "input_at"; base: bigint; iteration: bigint }
   | { mode: "digest"; base: bigint; runs: bigint }
+  /** Prefix digests after first, first + step, ... (count of them) runs, from one pass. */
+  | { mode: "checkpoints"; base: bigint; first: bigint; step: bigint; count: number }
   | { mode: "target_input_at"; base: bigint; iteration: bigint }
   | { mode: "evaluate"; input: Words }
   /** replay on the input the campaign draws at `iteration`, in one case. */
@@ -63,6 +65,7 @@ export function harnessBody(t: Target, call: HarnessCall): string {
       return `input_at(${p}, bounds: bounds_of(${p}), seed: ${seedExpr(t, call.base)}, iteration: ${call.iteration})`;
     }
     case "digest": return `digest(${wrapped}, seed: ${seedExpr(t, call.base)}, runs: ${call.runs})`;
+    case "checkpoints": return `digest_checkpoints(${wrapped}, seed: ${seedExpr(t, call.base)}, first: ${call.first}, step: ${call.step}, count: ${call.count})`;
     case "target_input_at": return `target_input_at(${wrapped}, seed: ${seedExpr(t, call.base)}, iteration: ${call.iteration})`;
     case "evaluate": return `evaluate(${wrapped}, input: ${inputExpr(t, call.input)})`;
     case "replay_at": {

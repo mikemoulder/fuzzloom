@@ -18,7 +18,7 @@ How each one gets found:
 - **Wrapping fee:** boundary-biased generation reaches the top of `u64`. Shrinking then walks down to the exact threshold, because the failure is monotone above it.
 - **Off-by-one withdraw:** the only failing inputs are on the line `amount == balance + 1`. Independent random draws essentially never land there. Correlated generation does (one multi-argument draw in eight). The joint shrink move then walks down the line to `(0, 1)`.
 - **Rounding direction:** a three-argument property stating the EIP-4626 rule directly: redeem never pays more than the exact pro-rata amount.
-- **Division by zero:** the property aborts instead of returning false, so the payload carries no input. Fuzzloom recovers it by bisecting on the run count (16 `fe` runs), confirms it by replay, then shrinks it by replay to `(0, 0)`.
+- **Division by zero:** the property aborts instead of returning false, so the payload carries no input. Fuzzloom recovers it by k-ary search on the run count, confirms it by replay, then shrinks it by replay to `(0, 0)`: 6 `fe` runs in total.
 
 ## Properties that pass
 
@@ -44,6 +44,8 @@ The first version of this example minted shares 1:1 whenever the share supply wa
 | `diff_net_position` (i128 wrapping) | agree |
 | `diff_fee` | agree |
 | `diff_rounding_mode` | **diverges** at input 269: for `x = 15398200176277126999`, sonatina returns `1539820017627712699` and native returns `1539820017627712700` (planted: a rounding bias gated on `#[cfg(target)]`) |
+
+Locating the divergence takes 8 `fe` runs, each with a single test. Every digest test emits checkpoints, the digest after many run counts, from one pass. The first round compares 256 of them, which already narrows the first differing input to a slice of 390. One more checkpoint round per backend pins it down exactly, and a final round evaluates it on both backends.
 
 `diff_fee` agrees even though `fee` is buggy, because it is wrong the same way on both backends.
 
