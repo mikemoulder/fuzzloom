@@ -53,3 +53,9 @@ test("describe names type boundaries", () => {
   assert.equal(describe(1n, "bool"), "true");
   assert.equal(describe(42n, "u32"), "42");
 });
+
+test("decodes an Evaluated payload", () => {
+  const sel = selector("Evaluated(uint64,uint256,uint256,uint256,uint256)");
+  const o = decodePayload(sel + [1n, 999n, 0n, 0n, 100n].map(word).join(""));
+  assert.deepEqual(o, { kind: "evaluated", arity: 1, input: [999n, 0n, 0n], output: 100n });
+});

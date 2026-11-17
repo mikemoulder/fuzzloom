@@ -35,6 +35,7 @@ export type Outcome =
   | { kind: "replayed"; arity: number; input: Words; failed: boolean }
   | { kind: "generated"; seed: bigint; iteration: bigint; arity: number; input: Words }
   | { kind: "digest"; seed: bigint; runs: bigint; arity: number; acc: bigint }
+  | { kind: "evaluated"; arity: number; input: Words; output: bigint }
   | { kind: "panic"; code: bigint; reason: string }
   | { kind: "revert"; message: string }
   | { kind: "infra"; reason: InfraReason; detail: string };

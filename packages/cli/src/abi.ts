@@ -12,6 +12,7 @@ export const SIGNATURES = {
   replayed: "Replayed(uint64,uint256,uint256,uint256,bool)",
   generated: "Generated(uint64,uint64,uint64,uint256,uint256,uint256)",
   digest: "Digest(uint64,uint64,uint64,uint256)",
+  evaluated: "Evaluated(uint64,uint256,uint256,uint256,uint256)",
   panic: "Panic(uint256)",
   error: "Error(string)",
 } as const;
@@ -71,6 +72,9 @@ export function decodePayload(hex: string): Outcome {
     case SELECTORS.digest:
       need(w, 4, "Digest");
       return { kind: "digest", seed: w[0]!, runs: w[1]!, arity: num(w[2]), acc: w[3]! };
+    case SELECTORS.evaluated:
+      need(w, 5, "Evaluated");
+      return { kind: "evaluated", arity: num(w[0]), input: triple(w, 1), output: w[4]! };
     case SELECTORS.panic: {
       const code = w[0] ?? 0n;
       return { kind: "panic", code, reason: PANIC_REASONS[code.toString()] ?? "unknown panic code" };

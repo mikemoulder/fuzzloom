@@ -43,3 +43,29 @@ test("integration: a generated harness runs through fe and decodes", () => {
   const r = runHarness(dir, "sonatina");
   assert.deepEqual(r.outcome, { kind: "replayed", arity: 2, input: [0n, 1n, 0n], failed: true });
 });
+
+test("every library function the harness generator calls is exported", () => {
+  // Regression: target_input_at existed but was not re-exported from lib.fe,
+  // so diff harnesses failed to compile while the library's own tests passed.
+  const lib = readFileSync(resolve(import.meta.dirname, "../../../ingots/fuzzloom/src/lib.fe"), "utf8");
+  const exported = new Set([...lib.matchAll(/pub use [\w:]+::(?:\{([^}]*)\}|(\w+))/g)]
+    .flatMap((m) => (m[1] ?? m[2] ?? "").split(",").map((x) => x.trim()).filter(Boolean)));
+  const calls: Parameters<typeof harnessBody>[1][] = [
+    { mode: "check", base: 1n, runs: 1n }, { mode: "replay", input: [1n, 2n, 3n] },
+    { mode: "input_at", base: 1n, iteration: 1n }, { mode: "digest", base: 1n, runs: 1n },
+    { mode: "target_input_at", base: 1n, iteration: 1n }, { mode: "evaluate", input: [1n, 2n, 3n] },
+  ];
+  const used = new Set<string>();
+  for (const arity of [1, 2, 3]) {
+    const args = two.args.concat(two.args).slice(0, arity);
+    for (const kind of ["property", "differential"] as const) {
+      for (const c of calls) {
+        const body = harnessBody({ ...two, kind, args, returns: "u8" }, c);
+        // Free functions and types, not associated functions after `::`.
+        for (const m of body.matchAll(/(?<!::)\b([A-Za-z_]\w*)\s*(?:\(|::)/g)) if (m[1] !== "prop_w") used.add(m[1]!);
+      }
+    }
+  }
+  const missing = [...used].filter((n) => !exported.has(n));
+  assert.deepEqual(missing, [], `not exported from lib.fe: ${missing.join(", ")}`);
+});

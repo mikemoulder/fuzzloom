@@ -25,7 +25,9 @@ export type HarnessCall =
   | { mode: "check"; base: bigint; runs: bigint }
   | { mode: "replay"; input: Words }
   | { mode: "input_at"; base: bigint; iteration: bigint }
-  | { mode: "digest"; base: bigint; runs: bigint };
+  | { mode: "digest"; base: bigint; runs: bigint }
+  | { mode: "target_input_at"; base: bigint; iteration: bigint }
+  | { mode: "evaluate"; input: Words };
 
 const hex = (n: bigint) => "0x" + n.toString(16);
 
@@ -51,6 +53,8 @@ export function harnessBody(t: Target, call: HarnessCall): string {
       return `input_at(${p}, bounds: bounds_of(${p}), seed: ${seedExpr(t, call.base)}, iteration: ${call.iteration})`;
     }
     case "digest": return `digest(${wrapped}, seed: ${seedExpr(t, call.base)}, runs: ${call.runs})`;
+    case "target_input_at": return `target_input_at(${wrapped}, seed: ${seedExpr(t, call.base)}, iteration: ${call.iteration})`;
+    case "evaluate": return `evaluate(${wrapped}, input: ${inputExpr(t, call.input)})`;
   }
 }
 

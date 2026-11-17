@@ -38,4 +38,7 @@ pub use diff::{
     digest_within,
     digest_of,
     digest,
+    target_input_at,
+    target_generated_at,
+    evaluate,
 }
