@@ -1,6 +1,6 @@
 <svg xmlns="http://www.w3.org/2000/svg" width="1280" height="420" viewBox="0 0 1280 420" role="img" aria-labelledby="t d">
   <title id="t">Fuzzloom</title>
-  <desc id="d">Fuzzloom: property-based testing, fuzzing and EVM/native differential testing for Fe. vault-math, seed 7: 4 of 4 planted bugs found and shrunk. First sonatina/native divergence pinned in 8 single-test fe runs. 92 Fe tests pass on both backends.</desc>
+  <desc id="d">Fuzzloom: property-based testing, fuzzing and EVM/native differential testing for Fe. vault-math, seed 7: 4 of 4 planted bugs found and shrunk. First sonatina/native divergence pinned in 8 single-test fe runs. 94 Fe tests pass on both backends.</desc>
   <defs>
     <pattern id="weave" width="24" height="24" patternUnits="userSpaceOnUse">
       <path d="M0 12h24M12 0v24" stroke="#1c2230" stroke-width="1"/>
@@ -32,6 +32,6 @@
   <g font-family="ui-monospace, SFMono-Regular, Menlo, Consolas, monospace" font-size="17" fill="#8b93a7">
     <text x="74" y="300"><tspan fill="#e8ff5a">4 / 4</tspan>  planted bugs found and shrunk (vault-math, seed 7)</text>
     <text x="74" y="332"><tspan fill="#5ad1ff">8</tspan>      single-test fe runs to pin the first backend divergence</text>
-    <text x="74" y="364"><tspan fill="#ffffff">92</tspan>     Fe tests passing on sonatina and on native</text>
+    <text x="74" y="364"><tspan fill="#ffffff">94</tspan>     Fe tests passing on sonatina and on native</text>
   </g>
 </svg>

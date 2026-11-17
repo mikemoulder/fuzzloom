@@ -1,5 +1,5 @@
 <p align="center">
-  <img src="assets/readme-banner.svg" alt="Fuzzloom: property-based testing, fuzzing and EVM/native differential testing for Fe. vault-math, seed 7: 4 of 4 planted bugs found and shrunk. First sonatina/native divergence pinned in 8 single-test fe runs. 92 Fe tests pass on both backends." width="100%">
+  <img src="assets/readme-banner.svg" alt="Fuzzloom: property-based testing, fuzzing and EVM/native differential testing for Fe. vault-math, seed 7: 4 of 4 planted bugs found and shrunk. First sonatina/native divergence pinned in 8 single-test fe runs. 94 Fe tests pass on both backends." width="100%">
 </p>
 
 <p align="center">
@@ -7,7 +7,7 @@
   <a href="#testing"><img alt="CI: CircleCI" src="https://img.shields.io/badge/CI-CircleCI-eef0f3?logo=circleci&labelColor=0b0d12"></a>
   <a href="#quick-start"><img alt="fe 26.6" src="https://img.shields.io/badge/fe-26.6-eef0f3?labelColor=0b0d12"></a>
   <a href="#quick-start"><img alt="Node 22.18+" src="https://img.shields.io/badge/node-22.18%2B-eef0f3?labelColor=0b0d12"></a>
-  <a href="#testing"><img alt="Fe tests: 92 on both backends" src="https://img.shields.io/badge/Fe%20tests-92%20%C3%97%202%20backends-5ad1ff?labelColor=0b0d12"></a>
+  <a href="#testing"><img alt="Fe tests: 94 on both backends" src="https://img.shields.io/badge/Fe%20tests-94%20%C3%97%202%20backends-5ad1ff?labelColor=0b0d12"></a>
   <a href="#testing"><img alt="CLI tests: 67" src="https://img.shields.io/badge/CLI%20tests-67-eef0f3?labelColor=0b0d12"></a>
   <a href="#at-a-glance"><img alt="Runtime dependencies: 0" src="https://img.shields.io/badge/runtime%20dependencies-0-eef0f3?labelColor=0b0d12"></a>
   <a href="#license"><img alt="License: Apache-2.0" src="https://img.shields.io/badge/license-Apache--2.0-eef0f3?labelColor=0b0d12"></a>
@@ -21,6 +21,7 @@
   <a href="docs/algorithms.md">Algorithms and guarantees</a> ·
   <a href="examples/vault-math">vault-math example</a> ·
   <a href="examples/token-ledger">token-ledger example</a> ·
+  <a href="examples/amm-swap">amm-swap example</a> ·
   <a href="SUBMISSION.md">Contest submission</a> ·
   <a href="CHANGELOG.md">Changelog</a> ·
   <a href="CONTRIBUTING.md">Contributing</a>
@@ -109,6 +110,16 @@ DIVERGE diff_rounding_mode(u64) -> u64  first at input 269, found in 3 search ro
 | `prop_vested_never_exceeds_total` | `total * elapsed` overflows `u128` for grants above about 1.08e31 | aborts at the first input once the property declares `/// fuzzloom: start in 1668464000..=1700000000` |
 
 The vesting bug shows why ranges exist. Without the annotation, a uniform `u64` start almost never falls inside the one-year window before the clock, and 10,000 inputs pass. With it, the first input aborts, and shrinking never leaves the declared range. With both documented fixes applied, `fuzzloom replay` reports both saved failures `FIXED`.
+
+### amm-swap: a real first draft, not a planted bug
+
+[`examples/amm-swap`](examples/amm-swap) is a Uniswap v2 style swap quote, written in a live session and tested with the published `npx fuzzloom`. Nothing was planted, and both hand-written tests pass.
+
+| Step | `fuzzloom fuzz --seed 7` |
+|---|---|
+| The draft, `u64` math | 0 of 3 properties pass: `amount_in * 997 * reserve_out` overflows, recovered from the abort and shrunk to `(2358, 1, 10312385981465)` |
+| First fix, `u128` math | `replay` reports the 3 saved failures `FIXED`, but the fresh campaign fails all 3 again: the numerator needs up to 138 bits |
+| `u256` math, as Uniswap v2 | 3 of 3 pass, all 6 saved failures `FIXED`, and `diff` agrees on 100,000 inputs on both backends |
 
 ### A crash in the Fe compiler
 
@@ -353,9 +364,9 @@ Two Fe-specific limits shape campaign sizes. `fe test` caps each EVM test at 10^
 
 | Suite | Count | What it covers |
 |---|---|---|
-| Fe library and examples | **92 tests, run on sonatina and on native** | PRNG streams and known answers, unbiased sampling, every generator, every shrink guarantee, prefix consistency, digest and checkpoint exactness, mutation bounds, a known-answer digest recorded identically from both backends |
+| Fe library and examples | **94 tests, run on sonatina and on native** | PRNG streams and known answers, unbiased sampling, every generator, every shrink guarantee, prefix consistency, digest and checkpoint exactness, mutation bounds, a known-answer digest recorded identically from both backends |
 | CLI | **67 tests** | Discovery (effects, fixtures, ranges, modules), harness generation for every mode, payload decoding, output parsing from real `fe` output, the k-ary search bound swept over every answer position, both replay shrinkers, JUnit, doctor, and integration tests that run real `fe` on both backends |
-| Pipeline | [`scripts/ci.sh`](scripts/ci.sh) | Installs Fe, checks formatting, runs both suites, packs the npm package and runs it outside the repo, then asserts that both examples reproduce their documented seed-7 results |
+| Pipeline | [`scripts/ci.sh`](scripts/ci.sh) | Installs Fe, checks formatting, runs both suites, packs the npm package and runs it outside the repo, then asserts that all three examples reproduce their documented seed-7 results |
 
 CI runs `scripts/ci.sh` on CircleCI, and the same script runs locally:
 
@@ -375,6 +386,7 @@ packages/cli/             the TypeScript CLI (published to npm as fuzzloom)
   src/abi.ts              payload decoding (selectors computed with keccak-256, never hardcoded)
 examples/vault-math/      pure functions, four planted bugs, four differential targets
 examples/token-ledger/    effects, fixtures and a declared range, two planted bugs
+examples/amm-swap/        a real first draft: a swap quote that overflows u64, found live
 spike/                    the experiments that validated each design decision on fe 26.6.0
 scripts/ci.sh             the whole CI pipeline
 docs/                     guide, architecture, algorithms

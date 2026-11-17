@@ -26,9 +26,10 @@ Everything was built during the contest:
   - It recovers the input of an abort by k-ary search on the run count, and shrinks it by replay.
   - It saves every failure as a regression record.
   - It reports through the terminal, `--json` and JUnit XML.
-- **Two examples with planted bugs:**
-  - `vault-math`: four bugs and a `#[cfg(target)]` backend divergence.
-  - `token-ledger`: effects, fixtures and a declared input range.
+- **Three examples:**
+  - `vault-math`: four planted bugs and a `#[cfg(target)]` backend divergence.
+  - `token-ledger`: effects, fixtures and a declared input range, two planted bugs.
+  - `amm-swap`: nothing planted. A swap quote written in a live session, exactly as first drafted, and tested with the published `npx fuzzloom`.
 - **A website** with the docs generated from the repository's markdown, plus `llms.txt`.
 
 Measured results, all reproducible with `--seed 7` and asserted by CI on every push:
@@ -38,6 +39,7 @@ Measured results, all reproducible with `--seed 7` and asserted by CI on every p
 | vault-math, `fuzz` | 4 of 4 planted bugs found and shrunk, including an off-by-one that only lies on `amount == balance + 1` (shrunk to `(0, 1)`) and a division by zero whose input was recovered from a panic and shrunk to `(0, 0)` |
 | vault-math, `diff` | the planted divergence pinned at input 269 of 100,000, with both outputs, in 8 single-test `fe` runs |
 | token-ledger, `fuzz` | both planted bugs found: a fee underflow (shrunk to `amount = 0`) and a `u128` overflow reachable only through the declared range |
+| amm-swap, `fuzz` | a real first draft: all 3 properties abort because `amount_in * 997 * reserve_out` overflows `u64`, recovered and shrunk to `(2358, 1, 10312385981465)`. A first fix in `u128` passed `replay` but failed the fresh campaign (the numerator needs 138 bits); with `u256` all 3 pass and `diff` agrees on both backends |
 | An unplanted bug | the vault model's first version had the ERC-4626 first-depositor issue, found by the round-trip property |
 
 ## Fe highlight
@@ -99,8 +101,8 @@ results, .fuzzloom/failures/*.json, terminal / --json / --junit
 
 ```sh
 fe --version   # fe 26.6.0 (5b3f96a)
-fe check       # the library and both examples type-check
-fe test        # 92 tests on sonatina; add --backend native on Linux/macOS for the same 92
+fe check       # the library and the three examples type-check
+fe test        # 94 tests on sonatina; add --backend native on Linux/macOS for the same 94
 fe build       # prints "No contracts found to build": Fuzzloom is a library and a CLI, it has no contracts
 ```
 
@@ -115,7 +117,7 @@ bash scripts/ci.sh                                         # the whole pipeline,
 
 - **Native backend:** needed by `diff` and `--backend native`. It runs on Linux and macOS; on Windows, Fuzzloom runs it inside WSL.
 - **Install Fe:** `curl -fsSL https://raw.githubusercontent.com/argotorg/fe/master/feup/feup.sh | bash -s -- --version v26.6.0`.
-- **CI:** `scripts/ci.sh` runs on CircleCI. It installs Fe, checks formatting, runs both test suites on both backends, packs the npm package and runs it outside the repository, and asserts both examples' seed-7 results.
+- **CI:** `scripts/ci.sh` runs on CircleCI. It installs Fe, checks formatting, runs both test suites on both backends, packs the npm package and runs it outside the repository, and asserts the three examples' seed-7 results.
 
 ## Demo
 
@@ -126,6 +128,7 @@ node packages/cli/src/index.ts doctor examples/vault-math
 node packages/cli/src/index.ts fuzz examples/vault-math --seed 7    # 3 passed, 4 failed (the four planted bugs)
 node packages/cli/src/index.ts diff examples/vault-math --seed 7    # 3 agreed, 1 diverged at input 269
 node packages/cli/src/index.ts fuzz examples/token-ledger --seed 7  # 2 passed, 2 failed (effects and a declared range)
+node packages/cli/src/index.ts fuzz examples/amm-swap --seed 7      # 0 passed, 3 failed (a real u64 overflow, found live)
 ```
 
 In your own ingot, outside this repository, the same commands are `npx fuzzloom doctor`, `npx fuzzloom fuzz` and so on.

@@ -2,6 +2,12 @@
 
 All notable changes to Fuzzloom. The project follows [semantic versioning](https://semver.org); while the version is 0.x, minor versions may change behaviour.
 
+## Unreleased
+
+### Examples
+
+- `amm-swap`: a Uniswap v2 style swap quote, exactly as first drafted in a live session. Nothing planted: `fuzz` finds a real `u64` overflow on the first run, and the README records a `u128` fix that `replay` accepted but a fresh campaign rejected. CI asserts its seed-7 result.
+
 ## 0.1.0 (2026-11-17)
 
 First release, published to npm as [`fuzzloom`](https://www.npmjs.com/package/fuzzloom).
