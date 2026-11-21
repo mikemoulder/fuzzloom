@@ -55,25 +55,26 @@ npm test
 
 step "Package: pack, install into an empty prefix, run outside the repo"
 pkg_tmp="$(mktemp -d)"
+trap 'rm -rf "$pkg_tmp"' EXIT
 (cd packages/cli && npm pack --silent --pack-destination "$pkg_tmp" >/dev/null)
 npm install -g --silent --prefix "$pkg_tmp/prefix" "$pkg_tmp"/fuzzloom-*.tgz
+pkg_bin="$pkg_tmp/prefix/bin/fuzzloom"
 mkdir -p "$pkg_tmp/project"
 cp -r examples/vault-math/fe.toml examples/vault-math/src "$pkg_tmp/project/"
-(cd "$pkg_tmp/project" && "$pkg_tmp/prefix/bin/fuzzloom" doctor && "$pkg_tmp/prefix/bin/fuzzloom" list >/dev/null)
-"$pkg_tmp/prefix/bin/fuzzloom" doctor "$pkg_tmp/project" | grep -q "lib/node_modules/fuzzloom/ingot" \
+(cd "$pkg_tmp/project" && "$pkg_bin" doctor && "$pkg_bin" list >/dev/null)
+"$pkg_bin" doctor "$pkg_tmp/project" | grep -q "lib/node_modules/fuzzloom/ingot" \
   || { echo "the installed CLI did not use its bundled Fe library"; exit 1; }
-rm -rf "$pkg_tmp"
 
-mkdir -p reports
+mkdir -p "$ROOT/reports"
 
 # Each demo runs one command on one example with seed 7 and checks the
 # documented summary. The expected exit code is 1 when the example has
 # findings and 0 when it has none; 2 would mean an infrastructure error.
 demo() {
-  local cmd="$1" example="$2" want="$3" expect="$4"; shift 4
-  local out="reports/$example-$cmd" code
+  local cli="$1" cmd="$2" example="$3" project="$4" want="$5" expect="$6"; shift 6
+  local out="$ROOT/reports/$example-$cmd" code
   set +e
-  node packages/cli/src/index.ts "$cmd" "examples/$example" --seed 7 --junit "$out-junit.xml" "$@" | tee "$out.txt"
+  (cd "$project" && "$cli" "$cmd" --seed 7 --junit "$out-junit.xml" "$@") | tee "$out.txt"
   code=${PIPESTATUS[0]}
   set -e
   [ "$code" -eq "$want" ] || { echo "expected exit $want, got $code"; exit 1; }
@@ -81,21 +82,36 @@ demo() {
 }
 
 step "Demo: fuzz vault-math, seed 7"
-demo fuzz vault-math 1 "3 passed, 4 failed, 0 infrastructure errors" --no-corpus
+demo "$pkg_bin" fuzz vault-math "$pkg_tmp/project" 1 "3 passed, 4 failed, 0 infrastructure errors" --no-corpus
 
 step "Demo: diff vault-math on both backends, seed 7"
-demo diff vault-math 1 "3 agreed, 1 diverged, 0 infrastructure errors"
+demo "$pkg_bin" diff vault-math "$pkg_tmp/project" 1 "3 agreed, 1 diverged, 0 infrastructure errors"
 grep -q "first at input 269" reports/vault-math-diff.txt
 
 step "Demo: fuzz token-ledger (effects and declared ranges), seed 7"
-demo fuzz token-ledger 1 "2 passed, 2 failed, 0 infrastructure errors" --no-corpus
+demo "$pkg_bin" fuzz token-ledger "$ROOT/examples/token-ledger" 1 "2 passed, 2 failed, 0 infrastructure errors" --no-corpus
 grep -q "start = 1668464001" reports/token-ledger-fuzz.txt
 
 step "Demo: diff token-ledger on both backends, seed 7"
-demo diff token-ledger 0 "1 agreed, 0 diverged, 0 infrastructure errors"
+demo "$pkg_bin" diff token-ledger "$ROOT/examples/token-ledger" 0 "1 agreed, 0 diverged, 0 infrastructure errors"
 
 step "Demo: fuzz amm-swap (a real first draft that overflows u64), seed 7"
-demo fuzz amm-swap 1 "0 passed, 3 failed, 0 infrastructure errors" --no-corpus
+demo "$pkg_bin" fuzz amm-swap "$ROOT/examples/amm-swap" 1 "0 passed, 3 failed, 0 infrastructure errors" --no-corpus
 grep -q "reserve_out = 10312385981465" reports/amm-swap-fuzz.txt
+
+step "Published npm release: fuzz on both backends and diff"
+# Pin the registry smoke test to a release that exists independently of the
+# checkout version, which may be in CI before it is published.
+npm install -g --silent --ignore-scripts --prefix "$pkg_tmp/published" fuzzloom@0.1.1
+published_bin="$pkg_tmp/published/bin/fuzzloom"
+published_project="$pkg_tmp/published-project"
+mkdir -p "$published_project"
+cp -r examples/vault-math/fe.toml examples/vault-math/src "$published_project/"
+for backend in sonatina native; do
+  demo "$published_bin" fuzz "published-vault-math-$backend" "$published_project" 1 \
+    "3 passed, 4 failed, 0 infrastructure errors" --no-corpus --backend "$backend"
+done
+demo "$published_bin" diff published-vault-math "$published_project" 1 "3 agreed, 1 diverged, 0 infrastructure errors"
+grep -q "first at input 269" reports/published-vault-math-diff.txt
 
 step "CI passed"

@@ -373,7 +373,7 @@ Batching was measured as an A/B on the same machine under the same load: `fuzz` 
 |---|---|---|
 | Fe library and examples | **97 tests, run on sonatina and on native** | PRNG streams and known answers, unbiased sampling, every generator, every shrink guarantee, prefix consistency, digest and checkpoint exactness, mutation bounds, a known-answer digest recorded identically from both backends |
 | CLI | **81 test cases** | Discovery (effects, fixtures, ranges, modules), saved-failure validation and symlink refusal (each replaying a security-audit exploit), harness generation for every mode, payload decoding, output parsing from real `fe` output, the k-ary search bound swept over every answer position, both replay shrinkers, JUnit, doctor, and integration tests that run real `fe` on both backends |
-| Pipeline | [`scripts/ci.sh`](scripts/ci.sh) | Installs Fe, checks formatting, runs both suites, then runs the three seed-7 examples through the installed package. Vault-math runs from a clean copy outside the repository |
+| Pipeline | [`scripts/ci.sh`](scripts/ci.sh) | Installs Fe, runs formatting and tests, then checks all three examples through the installed checkout package. A separate smoke test installs a pinned npm release and runs vault-math fuzz on each backend and diff across both |
 
 The commands for each suite are in [Build and test from source](#build-and-test-from-source). CI runs `scripts/ci.sh` on CircleCI, and the same script runs locally:
 
