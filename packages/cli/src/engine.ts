@@ -422,7 +422,7 @@ export async function recoverAbort(ctx: Context, target: Target, base: bigint, r
 export type DiffResult =
   | { status: "agreed"; target: Target; runs: bigint; acc: bigint; feRuns: number }
   | { status: "diverged"; target: Target; iteration: bigint; input: Words; outputs: { sonatina: bigint; native: bigint }; rounds: number; feRuns: number }
-  | { status: "infra"; target: Target; backend: Backend; reason: string; detail: string; feRuns: number };
+  | { status: "infra"; target: Target; backend: Backend | "both"; reason: string; detail: string; feRuns: number };
 
 /** One round on both backends at the same time. */
 async function onBoth(ctx: Context, cases: Case[], label: string, meter?: Meter): Promise<{ s: Outcome[]; n: Outcome[] }> {
@@ -437,11 +437,11 @@ async function onBoth(ctx: Context, cases: Case[], label: string, meter?: Meter)
 export const MAX_CHECKPOINTS = 256;
 
 /** The checkpoints call answering ascending, evenly spaced run counts `ks`. */
-export function checkpointCall(base: bigint, ks: bigint[]): HarnessCall {
+export function checkpointCall(base: bigint, ks: bigint[], key?: bigint): HarnessCall {
   if (ks.length === 0 || ks.length > MAX_CHECKPOINTS) throw new Error(`cannot checkpoint ${ks.length} run counts`);
   const step = ks.length > 1 ? ks[1]! - ks[0]! : 1n;
   if (ks.some((k, j) => k !== ks[0]! + BigInt(j) * step)) throw new Error("checkpoint run counts must be evenly spaced");
-  return { mode: "checkpoints", base, first: ks[0]!, step, count: ks.length };
+  return { mode: "checkpoints", base, first: ks[0]!, step, count: ks.length, key };
 }
 
 const accsOf = (o: Outcome, backend: Backend, count: number): bigint[] => {
@@ -461,10 +461,10 @@ const accsOf = (o: Outcome, backend: Backend, count: number): bigint[] => {
  * narrows any divergence to a 1/256 slice of the run count. Targets whose
  * checkpoints differ go to localiseDivergence.
  */
-export async function runDiffs(ctx: Context, targets: Target[], base: bigint, runs: bigint): Promise<DiffResult[]> {
+export async function runDiffs(ctx: Context, targets: Target[], base: bigint, runs: bigint, key: bigint): Promise<DiffResult[]> {
   if (targets.length === 0) return [];
   const ks = [...probePoints(1n, runs, MAX_CHECKPOINTS - 1), runs];
-  const first = await onBoth(ctx, targets.map((target) => ({ target, call: checkpointCall(base, ks) })), "digest");
+  const first = await onBoth(ctx, targets.map((target) => ({ target, call: checkpointCall(base, ks, key) })), "digest");
   const out: DiffResult[] = [];
   for (const [i, target] of targets.entries()) {
     try {
@@ -475,7 +475,7 @@ export async function runDiffs(ctx: Context, targets: Target[], base: bigint, ru
       // otherwise hide one).
       const res = ks.map((_, j) => s[j] !== n[j]);
       out.push(res.some((x) => x)
-        ? await localiseDivergence(ctx, target, base, narrow(1n, runs, ks, res))
+        ? await localiseDivergence(ctx, target, base, narrow(1n, runs, ks, res), key)
         : { status: "agreed", target, runs, acc: s[ks.length - 1]!, feRuns: 2 });
     } catch (e) {
       if (!(e instanceof Stop)) throw e;
@@ -488,38 +488,38 @@ export async function runDiffs(ctx: Context, targets: Target[], base: bigint, ru
 /**
  * Finds the first input on which the two backends disagree, given the run
  * counts [lo, hi] the first round left undecided (checkpoints known to
- * differ at hi). Digests are prefix-consistent (the first k folds are
- * identical for any run count >= k), so "digests differ at k runs" is
- * monotone in k and searchFirst finds the first diverging input exactly;
- * every search round is one checkpoint case per backend. One last round
- * evaluates that input on both backends (target_input_at alongside, since
- * evaluate may abort). Infrastructure outcomes are reported as such, never
- * as a divergence.
+ * differ at hi). In the absence of collisions at the queried prefixes,
+ * "digests differ" is monotone. The final round verifies that the same
+ * input gives different outputs. A collision can still hide an earlier
+ * divergence, so that verification alone cannot certify firstness.
  *
  * Cost: 2 * (1 + roundsFor(hi - lo, 256) + 1) fe runs of one case each. For
  * 10,000 runs the first round leaves at most 39 values, so 6 fe runs.
  */
-export async function localiseDivergence(ctx: Context, target: Target, base: bigint, range: { lo: bigint; hi: bigint }): Promise<DiffResult> {
+async function localiseDivergence(ctx: Context, target: Target, base: bigint, range: { lo: bigint; hi: bigint }, key: bigint): Promise<DiffResult> {
   const meter: Meter = { feRuns: 2 };
   const label = (l: string) => `${target.name}-${l}`;
   try {
     const found = await searchFirst(range.lo, range.hi, MAX_CHECKPOINTS, async (ks) => {
-      const r = await onBoth(ctx, [{ target, call: checkpointCall(base, ks) }], label("search"), meter);
+      const r = await onBoth(ctx, [{ target, call: checkpointCall(base, ks, key) }], label("search"), meter);
       const s = accsOf(r.s[0]!, "sonatina", ks.length);
       const n = accsOf(r.n[0]!, "native", ks.length);
       return ks.map((_, j) => s[j] !== n[j]);
     });
     const iteration = found.value - 1n;
     const r = await onBoth(ctx, [
-      { target, call: { mode: "target_input_at", base, iteration } },
       { target, call: { mode: "evaluate_at", base, iteration } },
     ], label("recover"), meter);
-    const g = r.s[0]!;
-    if (g.kind !== "generated") throw Stop.of(g, "sonatina", "Generated");
-    const es = r.s[1]!, en = r.n[1]!;
+    const es = r.s[0]!, en = r.n[0]!;
     if (es.kind !== "evaluated") throw Stop.of(es, "sonatina", "Evaluated");
     if (en.kind !== "evaluated") throw Stop.of(en, "native", "Evaluated");
-    return { status: "diverged", target, iteration, input: g.input, outputs: { sonatina: es.output, native: en.output }, rounds: 1 + found.rounds, feRuns: meter.feRuns };
+    if (es.arity !== target.args.length || en.arity !== es.arity || es.input.some((word, i) => word !== en.input[i])) {
+      return { status: "infra", target, backend: "both", reason: "unlocated", detail: `backends evaluated different inputs at input ${iteration + 1n}`, feRuns: meter.feRuns };
+    }
+    if (es.output === en.output) {
+      return { status: "infra", target, backend: "both", reason: "unlocated", detail: `checkpoints differ but outputs match at input ${iteration + 1n}`, feRuns: meter.feRuns };
+    }
+    return { status: "diverged", target, iteration, input: es.input, outputs: { sonatina: es.output, native: en.output }, rounds: 1 + found.rounds, feRuns: meter.feRuns };
   } catch (e) {
     if (!(e instanceof Stop)) throw e;
     return { status: "infra", target, backend: e.backend, reason: e.reason, detail: e.detail, feRuns: meter.feRuns };

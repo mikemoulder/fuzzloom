@@ -3,15 +3,14 @@
 //! A digest folds a function's outputs over the campaign input stream (the
 //! same `draw` stream properties use). The same harness built for sonatina
 //! and for native must produce the same digest. Digests are prefix-
-//! consistent: the first k folds are identical for any run count >= k, so on
-//! a mismatch the CLI searches on `runs` for the first input whose outputs
-//! differ, then recovers that input with `target_input_at`. Checkpoints make
+//! consistent: the first k folds are identical for any run count >= k. The
+//! CLI uses keyed checkpoints to search for the first differing output, then
+//! checks the recovered input on both backends. Checkpoints make
 //! that search cheap: one pass emits the prefix digests at many run counts,
 //! so a search round is one test per backend.
 //!
-//! The fold is order-sensitive FNV-style mixing over u256. It detects any
-//! single differing output word with overwhelming probability, but it is a
-//! checksum, not a cryptographic hash.
+//! Keyed checkpoints use a polynomial over GF(2^127 - 1). Matching
+//! checkpoints may collide. The unkeyed API retains its original checksum.
 
 use ingot::rng::Rng
 use ingot::word::Word
@@ -24,6 +23,8 @@ use std::evm::revert_error
 
 const FOLD_PRIME: u256 = 0x100000001B3
 const FOLD_OFFSET: u256 = 0xCBF29CE484222325
+const FIELD_PRIME: u256 = (1 << 127) - 1
+const LIMB_MASK: u256 = (1 << 126) - 1
 
 /// A function under differential test: one to three `Word` arguments, one
 /// `Word` result.
@@ -111,6 +112,61 @@ pub fn fold(_ acc: u256, _ out: u256) -> u256 {
     (acc ^ out).wrapping_mul(FOLD_PRIME).wrapping_add(FOLD_OFFSET)
 }
 
+/// One Horner step. For canonical field elements the intermediate fits u256.
+/// Since 2^127 == 1 in the field, one fold and one subtraction reduce it.
+fn field_step(_ acc: u256, _ limb: u256, _ key: u256) -> u256 {
+    let wide = acc.wrapping_mul(key).wrapping_add(limb)
+    let reduced = (wide & FIELD_PRIME).wrapping_add(wide >> 127)
+    if reduced >= FIELD_PRIME {
+        reduced.wrapping_sub(FIELD_PRIME)
+    } else {
+        reduced
+    }
+}
+
+/// Fixed-width base-2^126 digits encode the entire word injectively in the
+/// field, including leading zeros. Each word contributes three coefficients.
+fn keyed_fold(_ acc: u256, _ out: u256, _ key: u256) -> u256 {
+    let high = field_step(acc, out >> 252, key)
+    let middle = field_step(high, (out >> 126) & LIMB_MASK, key)
+    field_step(middle, out & LIMB_MASK, key)
+}
+
+#[test]
+fn keyed_fold_matches_integer_modulo_reference() {
+    // Reference computed with arbitrary-precision multiply and remainder.
+    // The words exercise limb boundaries and a product near the field limit.
+    let key = FIELD_PRIME - 2
+    let a = keyed_fold(0, !0, key)
+    assert!(a == 0x4000000000000000000000000000003c)
+    let b = keyed_fold(a, FIELD_PRIME, key)
+    assert!(b == 0x3ffffffffffffffffffffffffffffe19)
+    let c = keyed_fold(b, 1 << 252, key)
+    assert!(c == 0xf38)
+    assert!(
+        keyed_fold(c, 17, key) == 0x7fffffffffffffffffffffffffff8650,
+    )
+}
+
+#[test]
+fn legacy_checksum_reconverges_on_two_words() {
+    let left = fold(FOLD_OFFSET, 0)
+    let right = fold(FOLD_OFFSET, 1)
+    let join = left ^ right
+    assert!(left != right)
+    assert!(fold(left, 0) == fold(right, join))
+    assert!(
+        keyed_fold(keyed_fold(0, 0, 17), 0, 17) != keyed_fold(keyed_fold(0, 1, 17), join, 17),
+    )
+}
+
+#[test]
+fn keyed_fold_can_collide_even_on_the_first_word() {
+    // At key 1 the coefficient order is lost. A fixed key must never be
+    // treated as an unconditional guarantee that the predicate is monotone.
+    assert!(keyed_fold(0, 1, 1) == keyed_fold(0, 1 << 126, 1))
+}
+
 /// Folds `t` over the first `runs` inputs drawn within `bounds`.
 pub fn digest_within<T: Target>(_ t: T, bounds: Bounds, seed: u64, runs: u64) -> u256
 uses T::E
@@ -161,9 +217,24 @@ pub fn checkpoints_within<T: Target>(
 ) -> MemVec<u256>
 uses T::E
 {
+    collect_checkpoints(t, bounds, seed, first, step, count, 0)
+}
+
+fn collect_checkpoints<T: Target>(
+    _ t: T,
+    _ bounds: Bounds,
+    _ seed: u64,
+    _ first: u64,
+    _ step: u64,
+    _ count: u64,
+    _ key: u256,
+) -> MemVec<u256>
+uses T::E
+{
     let arity = T::arity()
     var rng = Rng::new(seed)
-    var acc: u256 = FOLD_OFFSET
+    // Zero selects the legacy checksum. A keyed digest starts from field zero.
+    var acc: u256 = if key == 0 { FOLD_OFFSET } else { 0 }
     var out: MemVec<u256> = MemVec::new()
     var done: u64 = 0
     var j: u64 = 0
@@ -171,7 +242,12 @@ uses T::E
         let at = first + j * step
         while done < at {
             let x = draw(bounds, arity, mut rng)
-            acc = fold(acc, t.eval(x))
+            let word = t.eval(x)
+            acc = if key == 0 {
+                fold(acc, word)
+            } else {
+                keyed_fold(acc, word, key)
+            }
             done += 1
         }
         out.push(acc)
@@ -211,6 +287,29 @@ uses T::E
 {
     assert!(count <= MAX_CHECKPOINTS)
     let accs = checkpoints_within(t, bounds, seed, first, step, count)
+    revert_error(
+        Checkpoints { seed, first, step, arity: T::arity(), accs: DynArray::from_mem_vec(accs) },
+    )
+}
+
+/// Prefix fingerprints under a key in 1..FIELD_PRIME. If two length-k output
+/// streams differ, their difference is a nonzero polynomial of degree at most
+/// 3*k-1. An independently uniform nonzero key hits a root with probability
+/// at most (3*k-1)/(FIELD_PRIME-1). A caller-supplied fixed key has no such
+/// probability guarantee. Use the same key for both backends and all rounds.
+pub fn keyed_checkpoints_within<T: Target>(
+    _ t: T,
+    bounds: Bounds,
+    seed: u64,
+    first: u64,
+    step: u64,
+    count: u64,
+    key: u256,
+) -> !
+uses T::E
+{
+    assert!(count <= MAX_CHECKPOINTS && key > 0 && key < FIELD_PRIME)
+    let accs = collect_checkpoints(t, bounds, seed, first, step, count, key)
     revert_error(
         Checkpoints { seed, first, step, arity: T::arity(), accs: DynArray::from_mem_vec(accs) },
     )

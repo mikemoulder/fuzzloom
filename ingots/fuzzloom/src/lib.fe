@@ -53,6 +53,7 @@ pub use diff::{
     checkpoints_of,
     digest_checkpoints,
     digest_checkpoints_within,
+    keyed_checkpoints_within,
     target_bounds_of,
     target_input_at_within,
     MAX_CHECKPOINTS,

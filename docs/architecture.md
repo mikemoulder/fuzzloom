@@ -100,7 +100,7 @@ Harness modes:
 | `replay` | `replay` | One saved or candidate input |
 | `input_at` | `input_at`, `mutant_at(_within)` | The input at an iteration, without evaluating it |
 | `replay_at` | `replay` of `generated_at` / `mutated_at` | Evaluating that input in the same test |
-| `checkpoints` | `digest_checkpoints(_within)` | Up to 256 prefix digests in one pass |
+| `checkpoints` | `keyed_checkpoints_within` | Up to 256 keyed prefix digests in one pass |
 | `target_input_at` | `target_input_at(_within)` | The input a digest drew at an iteration |
 | `evaluate`, `evaluate_at` | `evaluate` | One differential output |
 

@@ -29,6 +29,7 @@ Commands:
 
 Options:
   --seed <n>        base seed (default: random, printed so the run can be repeated)
+  --digest-key <n>  diff: reuse a recorded checkpoint key (default: independently random)
   --runs <n>        inputs per property (default 10000; diff default 100000)
   --backend <b>     sonatina (EVM, default) or native
   --only <name>     run only targets (or, for replay, saved failures) whose name contains this text
@@ -39,7 +40,7 @@ Options:
 
 Exit codes: 0 all passed, 1 a property failed or aborted, 2 infrastructure error.`;
 
-type Opts = { seed?: string; runs?: string; backend: string; only?: string; json: boolean; "no-corpus": boolean; junit?: string };
+type Opts = { seed?: string; "digest-key"?: string; runs?: string; backend: string; only?: string; json: boolean; "no-corpus": boolean; junit?: string };
 
 /** Most saved failures seeding mutation campaigns, per property (most recently updated first). */
 const SEEDS_PER_TARGET = 8;
@@ -50,6 +51,7 @@ async function main(argv: string[]): Promise<number> {
     allowPositionals: true,
     options: {
       seed: { type: "string" },
+      "digest-key": { type: "string" },
       runs: { type: "string" },
       backend: { type: "string", default: "sonatina" },
       only: { type: "string" },
@@ -66,6 +68,7 @@ async function main(argv: string[]): Promise<number> {
   }
   const opts = v as Opts;
   if (opts.backend !== "sonatina" && opts.backend !== "native") throw new Error(`unknown backend ${opts.backend}`);
+  if (opts["digest-key"] !== undefined && command !== "diff") throw new Error("--digest-key requires diff");
   const pathArg = (i: number) => resolve(positionals[i] ?? ".");
   switch (command) {
     case "doctor": return doctor(positionals[1] ? pathArg(1) : undefined, opts);
@@ -237,18 +240,34 @@ function progress(opts: Opts): Context["onRun"] {
   return opts.json ? undefined : (what, ms) => process.stderr.write(dim(`  .. ${what} (${ms} ms)\n`));
 }
 
+function digestKey(requested: string | undefined): bigint {
+  const prime = (1n << 127n) - 1n;
+  if (requested !== undefined) {
+    const key = BigInt(requested);
+    if (key <= 0n || key >= prime) throw new Error("--digest-key must be between 1 and 2^127 - 2");
+    return key;
+  }
+  // Mask to 127 bits and reject the two endpoints for a uniform nonzero field key.
+  let key: bigint;
+  do {
+    key = BigInt("0x" + randomBytes(16).toString("hex")) & prime;
+  } while (key === 0n || key === prime);
+  return key;
+}
+
 async function diff(root: string, opts: Opts): Promise<number> {
   const d = discover(root);
   const base = baseSeed(opts);
+  const key = digestKey(opts["digest-key"]);
   const runs = BigInt(opts.runs ?? "100000");
   const fe = defaultFeConfig();
   const version = feVersion(fe);
   const targets = d.targets.filter((t) => t.kind === "differential" && (!opts.only || t.name.includes(opts.only)));
   const ctx: Context = { userRoot: root, ingot: d.ingot, backend: "sonatina", fe, onRun: progress(opts) };
-  if (!opts.json) console.log(`${bold("fuzzloom diff")} ${d.ingot}  ${dim(`seed ${base}, ${runs} inputs per target, sonatina vs native, ${version}`)}`);
+  if (!opts.json) console.log(`${bold("fuzzloom diff")} ${d.ingot}  ${dim(`seed ${base}, digest key ${key}, ${runs} inputs per target, sonatina vs native, ${version}`)}`);
   const started = Date.now();
   const results: { result: DiffResult; record?: string }[] = [];
-  for (const r of await runDiffs(ctx, targets, base, runs)) {
+  for (const r of await runDiffs(ctx, targets, base, runs, key)) {
     const t = r.target;
     let id: string | undefined;
     if (r.status === "diverged") {
@@ -264,12 +283,12 @@ async function diff(root: string, opts: Opts): Promise<number> {
   }
   const diverged = results.filter((x) => x.result.status === "diverged").length;
   const infra = results.filter((x) => x.result.status === "infra").length;
-  writeJUnit(opts, `fuzzloom diff ${d.ingot}`, started, { command: "diff", seed: String(base), runs: String(runs), backends: "sonatina,native", fe_version: version },
+  writeJUnit(opts, `fuzzloom diff ${d.ingot}`, started, { command: "diff", seed: String(base), digest_key: String(key), runs: String(runs), backends: "sonatina,native", fe_version: version },
     results.map(({ result: r, record }) => junitCase(`${d.ingot}.diff`, r.target, formatDiff(r, record),
       r.status === "agreed" ? "pass" : r.status === "infra" ? "error" : "failure",
       r.status === "diverged" ? "divergence" : r.status === "infra" ? r.reason : undefined)));
-  if (opts.json) console.log(JSON.stringify(toJson({ ingot: d.ingot, seed: base, runs, fe_version: version, results }), null, 2));
-  else console.log(`\n${results.length - diverged - infra} agreed, ${diverged} diverged, ${infra} infrastructure errors in ${seconds(started)}  ${dim(`(repeat with --seed ${base})`)}`);
+  if (opts.json) console.log(JSON.stringify(toJson({ ingot: d.ingot, seed: base, digest_key: key, runs, fe_version: version, results }), null, 2));
+  else console.log(`\n${results.length - diverged - infra} agreed, ${diverged} diverged, ${infra} infrastructure errors in ${seconds(started)}  ${dim(`(repeat with --seed ${base} --digest-key ${key})`)}`);
   return infra > 0 ? 2 : diverged > 0 ? 1 : 0;
 }
 

@@ -93,7 +93,7 @@ A shrink that ran out of budget says `(budget reached, may not be minimal)`. The
 
 ## 4. Seeds and reproducibility
 
-Every run has a base seed. Without `--seed`, Fuzzloom picks one at random and prints it (`repeat with --seed 123`). Each property draws from its own stream, derived from the base seed and the property's name. The same seed, runs and code therefore give the same inputs on every machine and on both backends. Renaming a property changes its stream; adding another property does not.
+Every run has a base seed. Without `--seed`, Fuzzloom picks one at random and prints it. Each property draws from its own stream, derived from the base seed and the property's name. The same seed, runs and code give the same inputs on every machine and on both backends. To repeat a differential run's checkpoint comparisons as well as its inputs, pass both the reported `--seed` and `--digest-key`.
 
 To dig into one failure, `reproduce` replays the saved input directly, without generating anything:
 

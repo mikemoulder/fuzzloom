@@ -153,22 +153,25 @@ Each round accepts the reproducing candidate with the fewest total bits, then th
 
 **Source:** [`diff.fe`](../ingots/fuzzloom/src/diff.fe), `runDiffs` and `localiseDivergence` in [`engine.ts`](../packages/cli/src/engine.ts)
 
-**Digest.** `fold(acc, out) = ((acc ^ out) * 0x100000001B3 + 0xCBF29CE484222325) mod 2^256`, starting from the offset, over a target's outputs on the campaign stream. The fold is order-sensitive, so the digest after `k` inputs is the same whatever the total run count. That makes "digests differ after `k` inputs" monotone in `k`.
+**Digest.** The CLI splits each 256-bit output into three base-`2^126` digits and feeds them most significant first into `acc = (acc * key + digit) mod p`, starting at zero, with `p = 2^127 - 1`. Every digit is strictly less than `p`, so distinct output sequences of equal length give distinct coefficient sequences. The Fe reducer adds the low 127 bits to the high bits, using `2^127 ≡ 1 (mod p)`. A single conditional subtraction suffices because the unreduced sum is below `2p`. The unkeyed Fe API still produces its original FNV-style checksum.
 
-**Checkpoints.** `checkpoints_within(t, bounds, seed, first, step, count)` folds once. It returns the digest after `first + j * step` inputs for every `j < count` (at most 256), as a `DynArray<u256>` payload. Fixed-size arrays are not allowed in Fe custom errors, so the payload uses `DynArray`, built with `MemVec`, which encodes identically on both backends.
+**Checkpoints.** `keyed_checkpoints_within` folds once and returns the digest after `first + j * step` inputs for every `j < count` (at most 256) in a `DynArray<u256>` payload. Each prefix depends only on its inputs and key, so overlapping prefixes agree across rounds on the same backend.
 
-**Search.** The first round asks each target for checkpoints at the first search round's probes, plus the full run count. If every checkpoint matches, the target agrees. Any mismatch is a proven divergence, so a fold collision at the final digest cannot hide one. Later rounds use the same arithmetic-progression probes as section 5, so one checkpoint test answers a whole round. A final round regenerates the first diverging input and evaluates it on both backends.
+**Collision bound.** With deterministic streams fixed independently of an initially uniform nonzero key, two different length-`k` prefixes collide with probability at most `(3k - 1)/(p - 1)` over the sampled key. Before the first differing output, prefix digests always agree. For one target, sum the bound over the probes on the collision-free search path. The path is fixed independently of the key, and the actual adaptive search can first depart from it only at one of those probes. Sum across targets for a campaign-wide bound. The probability applies to a fresh draw and gives no unconditional guarantee for a fixed key.
+
+**Search.** The first round probes evenly spaced checkpoints through the full run count. Subsequent rounds narrow the interval using the arithmetic progressions in section 5. A final round reports a finding only when both backends evaluated the same input and returned different outputs. If the candidate fails validation, the CLI reports `unlocated` as an infrastructure result. A collision can hide a mismatch or lead the search to a later real mismatch. The CLI records the independent key in text, JSON and JUnit. `--digest-key` reuses it for an exact rerun of the comparisons.
 
 | Guarantee | Test |
 |---|---|
 | Each checkpoint equals the digest at its run count exactly | `every_checkpoint_equals_the_digest_at_its_run_count` |
-| Checkpoints agree before the first differing output and differ from it on | `checkpoints_locate_the_first_differing_output` |
+| The old checksum can reconverge after two differing output words | `legacy_checksum_reconverges_on_two_words` |
+| Field arithmetic matches an integer-modulo reference at limb boundaries | `keyed_fold_matches_integer_modulo_reference` |
+| A fixed key can collide at the first output | `keyed_fold_can_collide_even_on_the_first_word` |
 | The digest is the fold of exactly the generated inputs | `digest_is_the_fold_of_the_generated_inputs` |
 | A single differing output changes the digest; seed and run count matter | `digest_detects_a_single_differing_output`, `digest_depends_on_seed_and_runs` |
 | Both backends compute the same fold, generator and PRNG: one recorded constant checked on each | `known_answer_digest_matches_on_every_backend` |
 | The real `Checkpoints` payload decodes and matches separate digest tests on both backends | CLI: `integration: real checkpoints equal separate digests, on both backends` |
-
-**Limit:** the fold is a checksum, not a cryptographic hash. It detects a single differing output with overwhelming probability, but it is not designed against an adversary.
+| Generated keyed checkpoints match an independent BigInt reference on both backends | CLI: `integration: keyed checkpoints match a BigInt reference on both backends` |
 
 ## 8. Mutation around saved failures
 

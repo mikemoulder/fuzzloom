@@ -45,11 +45,11 @@ The first version of this example minted shares 1:1 whenever the share supply wa
 | `diff_fee` | agree |
 | `diff_rounding_mode` | **diverges** at input 269: for `x = 15398200176277126999`, sonatina returns `1539820017627712699` and native returns `1539820017627712700` (planted: a rounding bias gated on `#[cfg(target)]`) |
 
-Locating the divergence takes 8 `fe` runs, each with a single test. Every digest test emits checkpoints, the digest after many run counts, from one pass. The first round compares 256 of them, which already narrows the first differing input to a slice of 390. One more checkpoint round per backend pins it down exactly, and a final round evaluates it on both backends.
+Seed 7 takes eight `fe` invocations across both backends. The initial round compares up to 256 keyed checkpoints per target in one pass. Two search rounds narrow the interval for the differing target, then a recovery round verifies the same input yields the two different outputs above. The [algorithm notes](../../docs/algorithms.md#7-differential-digests-and-checkpoints) explain the chance of a checkpoint collision.
 
 `diff_fee` agrees even though `fee` is buggy, because it is wrong the same way on both backends.
 
-A note on gas: `fe test` caps a test at 1e9 gas on the EVM backend. An earlier build of the sampler ran out of gas at 62,513 runs for `diff_net_position`. A naive comparison would have reported that as a backend mismatch. Fuzzloom treats out-of-gas as an infrastructure result, never as a divergence. After an optimisation, the same digest fits about 290,000 runs. Differential testing finds divergence between targets. Property testing finds wrong behaviour. They catch different bugs.
+`fe test` caps each EVM test at 10^9 gas. With Fe 26.6.0, seed 7 and key `2^127 - 3`, a keyed checkpoint for `diff_net_position` completed at 200,000 inputs and exceeded the cap at 250,000. Fuzzloom reports out-of-gas as an infrastructure result.
 
 ## Running it
 

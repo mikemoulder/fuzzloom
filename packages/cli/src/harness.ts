@@ -49,7 +49,7 @@ export type HarnessCall =
   | { mode: "input_at"; base: bigint; iteration: bigint; corpus?: Words }
   | { mode: "digest"; base: bigint; runs: bigint }
   /** Prefix digests after first, first + step, ... (count of them) runs, from one pass. */
-  | { mode: "checkpoints"; base: bigint; first: bigint; step: bigint; count: number }
+  | { mode: "checkpoints"; base: bigint; first: bigint; step: bigint; count: number; key?: bigint }
   | { mode: "target_input_at"; base: bigint; iteration: bigint }
   | { mode: "evaluate"; input: Words }
   /** replay on the input the campaign draws at `iteration`, in one case. */
@@ -136,6 +136,7 @@ export function harnessBody(t: Target, call: HarnessCall): string {
       return `digest(${wrapped}, seed: ${seedExpr(t, call.base)}, runs: ${call.runs})`;
     case "checkpoints": {
       const tail = `seed: ${seedExpr(t, call.base)}, first: ${call.first}, step: ${call.step}, count: ${call.count}`;
+      if (call.key !== undefined) return `keyed_checkpoints_within(${wrapped}, bounds: ${B}, ${tail}, key: ${hex(call.key)})`;
       return bounded ? `digest_checkpoints_within(${wrapped}, bounds: ${B}, ${tail})` : `digest_checkpoints(${wrapped}, ${tail})`;
     }
     case "target_input_at": {

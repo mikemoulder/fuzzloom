@@ -38,6 +38,14 @@ test("searchFirst finds the exact minimum within the stated round bound", async 
   }
 });
 
+test("a matching checkpoint after an earlier mismatch can hide the first divergence", async () => {
+  // The first unequal prefix is 2, but a collision at the probe at 4
+  // discards that prefix. The search then finds the later unequal prefix.
+  const result = await searchFirst(1n, 8n, 1, async (probes) =>
+    probes.map((prefix) => prefix === 2n || prefix >= 7n));
+  assert.equal(result.value, 7n);
+});
+
 test("probePoints is an evenly spaced progression whose gaps meet the roundsFor bound", () => {
   for (const width of [1, 3, 21, 255, 256]) {
     for (const [lo, hi] of [[1n, 2n], [1n, 40n], [5n, 300n], [1n, 10000n], [1n, 1n << 40n]] as const) {

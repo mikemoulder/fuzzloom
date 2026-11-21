@@ -4,9 +4,13 @@ import { mkdtempSync, readFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join, resolve } from "node:path";
 import { callable, caseName, fnv1a64, harnessBody, writeBatch, writeHarness, type Case } from "../src/harness.ts";
-import { runBatch, runHarness } from "../src/fe.ts";
+import { defaultFeConfig, nativeFeVersion, runBatch, runHarness } from "../src/fe.ts";
 import { discover } from "../src/discover.ts";
 import type { Target, Words } from "../src/types.ts";
+
+const nativeSkip = process.platform === "win32" &&
+  !nativeFeVersion({ ...defaultFeConfig(), timeoutMs: 10_000 }) &&
+  "requires a working WSL distro with Fe installed";
 
 test("fnv1a64 matches reference vectors", () => {
   assert.equal(fnv1a64(""), 0xcbf29ce484222325n);
@@ -67,6 +71,7 @@ test("every library function the harness generator calls is exported", () => {
     { mode: "check", base: 1n, runs: 1n }, { mode: "replay", input: [1n, 2n, 3n] },
     { mode: "input_at", base: 1n, iteration: 1n }, { mode: "digest", base: 1n, runs: 1n },
     { mode: "checkpoints", base: 1n, first: 1n, step: 1n, count: 1 },
+    { mode: "checkpoints", base: 1n, first: 1n, step: 1n, count: 1, key: 17n },
     { mode: "target_input_at", base: 1n, iteration: 1n }, { mode: "evaluate", input: [1n, 2n, 3n] },
     { mode: "replay_at", base: 1n, iteration: 1n }, { mode: "evaluate_at", base: 1n, iteration: 1n },
     { mode: "check", base: 1n, runs: 1n, corpus: [1n, 2n, 3n] }, { mode: "input_at", base: 1n, iteration: 1n, corpus: [1n, 2n, 3n] },
@@ -85,6 +90,43 @@ test("every library function the harness generator calls is exported", () => {
   }
   const missing = [...used].filter((n) => !exported.has(n));
   assert.deepEqual(missing, [], `not exported from lib.fe: ${missing.join(", ")}`);
+});
+
+test("integration: keyed checkpoints match a BigInt reference on both backends", async (t) => {
+  const root = resolve(import.meta.dirname, "../../../examples/vault-math");
+  const { ingot, targets } = discover(root);
+  const target = targets.find((x) => x.name === "diff_mul_div")!;
+  const work = mkdtempSync(join(tmpdir(), "fuzzloom-"));
+  const prime = (1n << 127n) - 1n;
+  const mask = (1n << 126n) - 1n;
+  const key = prime - 2n;
+  const base = 7n;
+  const cases: Case[] = [
+    { target, call: { mode: "checkpoints", base, first: 0n, step: 1n, count: 9, key } },
+    ...Array.from({ length: 8 }, (_, i): Case => ({ target, call: { mode: "evaluate_at", base, iteration: BigInt(i) } })),
+  ];
+  const dir = writeBatch({ userRoot: root, ingot, cases, workDir: work, name: "keyed-checkpoints" });
+  let reference: bigint[] | undefined;
+  for (const backend of ["sonatina", "native"] as const) {
+    await t.test(backend, { skip: backend === "native" && nativeSkip }, async () => {
+      const { outcomes } = await runBatch(dir, cases.map((_, i) => caseName(i)), backend);
+      const [checkpoints, ...evaluations] = outcomes;
+      assert.equal(checkpoints?.kind, "checkpoints", backend);
+      const expected = [0n];
+      let acc = 0n;
+      for (const evaluation of evaluations) {
+        assert.equal(evaluation.kind, "evaluated", backend);
+        const word = evaluation.output;
+        for (const limb of [word >> 252n, (word >> 126n) & mask, word & mask]) {
+          acc = (acc * key + limb) % prime;
+        }
+        expected.push(acc);
+      }
+      assert.deepEqual(checkpoints.accs, expected, backend);
+      if (reference) assert.deepEqual(checkpoints.accs, reference);
+      reference = checkpoints.accs;
+    });
+  }
 });
 
 test("integration: one batch harness answers every case by name, including the new modes", async () => {
@@ -133,7 +175,7 @@ test("integration: a mutation campaign runs through fe and its mutants are recov
   if (g.kind === "generated" && rep.kind === "replayed") assert.deepEqual(rep.input, g.input);
 });
 
-test("integration: real checkpoints equal separate digests, on both backends", async () => {
+test("integration: real checkpoints equal separate digests, on both backends", async (t) => {
   // The decoder reads the DynArray tail from real fe output, and every
   // checkpoint matches the digest a separate case computes for that run count.
   const root = resolve(import.meta.dirname, "../../../examples/vault-math");
@@ -145,13 +187,15 @@ test("integration: real checkpoints equal separate digests, on both backends", a
     ...[0n, 25n, 50n, 75n, 100n].map((runs): Case => ({ target: fee, call: { mode: "digest", base: 7n, runs } })),
   ];
   for (const backend of ["sonatina", "native"] as const) {
-    const dir = writeBatch({ userRoot: root, ingot: d.ingot, cases, workDir: work, name: `cps-${backend}` });
-    const r = await runBatch(dir, cases.map((_, i) => caseName(i)), backend);
-    const c = r.outcomes[0]!;
-    assert.equal(c.kind, "checkpoints", JSON.stringify(c, (_, v) => typeof v === "bigint" ? v.toString() : v));
-    if (c.kind !== "checkpoints") continue;
-    assert.equal(c.accs.length, 5);
-    assert.deepEqual(c.accs, r.outcomes.slice(1).map((o) => (o.kind === "digest" ? o.acc : -1n)), backend);
+    await t.test(backend, { skip: backend === "native" && nativeSkip }, async () => {
+      const dir = writeBatch({ userRoot: root, ingot: d.ingot, cases, workDir: work, name: `cps-${backend}` });
+      const r = await runBatch(dir, cases.map((_, i) => caseName(i)), backend);
+      const c = r.outcomes[0]!;
+      assert.equal(c.kind, "checkpoints", JSON.stringify(c, (_, v) => typeof v === "bigint" ? v.toString() : v));
+      if (c.kind !== "checkpoints") return;
+      assert.equal(c.accs.length, 5);
+      assert.deepEqual(c.accs, r.outcomes.slice(1).map((o) => (o.kind === "digest" ? o.acc : -1n)), backend);
+    });
   }
 });
 
@@ -168,7 +212,7 @@ test("an effectful target becomes a closure that builds fresh fixtures", () => {
   assert.equal(callable(two), "prop2(prop_w)");
 });
 
-test("integration: effectful targets run through fe on both backends", async () => {
+test("integration: effectful targets run through fe on both backends", async (t) => {
   // Real fixtures, real with-blocks: the transfer property aborts (planted
   // fee underflow) at amount 0, the overdraft property passes, the fee quote
   // evaluates identically on both backends.
@@ -183,12 +227,14 @@ test("integration: effectful targets run through fe on both backends", async () 
     { target: by("diff_fee_quote"), call: { mode: "evaluate", input: [1000000n, 0n, 0n] } },
   ];
   for (const backend of ["sonatina", "native"] as const) {
-    const dir = writeBatch({ userRoot: root, ingot: d.ingot, cases, workDir: work, name: `fx-${backend}` });
-    const r = await runBatch(dir, cases.map((_, i) => caseName(i)), backend);
-    assert.deepEqual(r.outcomes[0], { kind: "panic", code: 17n, reason: "arithmetic overflow or underflow" }, backend);
-    assert.deepEqual(r.outcomes[1], { kind: "replayed", arity: 2, input: [10000n, 1n, 0n], failed: false }, backend);
-    assert.equal(r.outcomes[2]!.kind, "passed", backend);
-    assert.deepEqual(r.outcomes[3], { kind: "evaluated", arity: 1, input: [1000000n, 0n, 0n], output: 2500n }, backend);
+    await t.test(backend, { skip: backend === "native" && nativeSkip }, async () => {
+      const dir = writeBatch({ userRoot: root, ingot: d.ingot, cases, workDir: work, name: `fx-${backend}` });
+      const r = await runBatch(dir, cases.map((_, i) => caseName(i)), backend);
+      assert.deepEqual(r.outcomes[0], { kind: "panic", code: 17n, reason: "arithmetic overflow or underflow" }, backend);
+      assert.deepEqual(r.outcomes[1], { kind: "replayed", arity: 2, input: [10000n, 1n, 0n], failed: false }, backend);
+      assert.equal(r.outcomes[2]!.kind, "passed", backend);
+      assert.deepEqual(r.outcomes[3], { kind: "evaluated", arity: 1, input: [1000000n, 0n, 0n], output: 2500n }, backend);
+    });
   }
 });
 
@@ -199,7 +245,7 @@ test("integration: every bounded entry point compiles, runs and stays in range",
   const over: Target = { ...d.targets.find((x) => x.name === "prop_overdraft_changes_nothing")!, bounds: [{ arg: 0, lo: 1000000n, hi: 1000100n }] };
   const work = mkdtempSync(join(tmpdir(), "fuzzloom-"));
   const cases: Case[] = [
-    { target: quote, call: { mode: "checkpoints", base: 3n, first: 1n, step: 10n, count: 3 } },
+    { target: quote, call: { mode: "checkpoints", base: 3n, first: 1n, step: 10n, count: 3, key: 17n } },
     { target: quote, call: { mode: "target_input_at", base: 3n, iteration: 4n } },
     { target: quote, call: { mode: "evaluate_at", base: 3n, iteration: 4n } },
     { target: over, call: { mode: "check", base: 3n, runs: 300n } },

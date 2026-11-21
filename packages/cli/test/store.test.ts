@@ -1,6 +1,6 @@
 // Failure records come from the repository under test, so these tests plant
 // the attacks from the security audit and check that each one fails.
-import { test } from "node:test";
+import { test, type TestContext } from "node:test";
 import assert from "node:assert/strict";
 import { existsSync, mkdirSync, mkdtempSync, readFileSync, readdirSync, symlinkSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
@@ -88,17 +88,27 @@ test("validateRecord rejects input words that are not hex for every argument", (
   assert.throws(() => validateRecord({ ...r, version: 2 }), /version 2/);
 });
 
-/** A directory link that needs no privileges: a junction on Windows, a symlink elsewhere. */
-const link = (target: string, path: string) => symlinkSync(target, path, process.platform === "win32" ? "junction" : "dir");
+/** Probe junction support at the actual test path before running assertions. */
+function link(t: TestContext, target: string, path: string): boolean {
+  try {
+    symlinkSync(target, path, process.platform === "win32" ? "junction" : "dir");
+    return true;
+  } catch (error) {
+    const code = (error as NodeJS.ErrnoException).code;
+    if (process.platform !== "win32" || !["EPERM", "EACCES", "ENOTSUP", "ENOSYS"].includes(code ?? "")) throw error;
+    t.skip(`temporary filesystem cannot create a Windows junction (${code})`);
+    return false;
+  }
+}
 
-test("a symlinked .fuzzloom is refused for records and for the scratch directory", () => {
+test("a symlinked .fuzzloom is refused for records and for the scratch directory", (t) => {
   const parent = mkdtempSync(join(tmpdir(), "fuzzloom-link-"));
   const victim = join(parent, "victim");
   mkdirSync(join(victim, "tmp"), { recursive: true });
   writeFileSync(join(victim, "tmp", "keep-me.txt"), "important");
   const root = join(parent, "repo");
   mkdirSync(root);
-  link(victim, join(root, ".fuzzloom"));
+  if (!link(t, victim, join(root, ".fuzzloom"))) return;
   assert.throws(() => workDir(root), /is a symlink/);
   assert.throws(() => listRecords(root), /is a symlink/);
   assert.throws(() => saveRecord(root, record()), /is a symlink/);
@@ -106,13 +116,13 @@ test("a symlinked .fuzzloom is refused for records and for the scratch directory
   assert.deepEqual(readdirSync(victim), ["tmp"]);
 });
 
-test("a symlinked .fuzzloom/tmp is refused too", () => {
+test("a symlinked .fuzzloom/tmp is refused too", (t) => {
   const parent = mkdtempSync(join(tmpdir(), "fuzzloom-link-"));
   const victim = join(parent, "victim");
   mkdirSync(victim);
   const root = join(parent, "repo");
   mkdirSync(join(root, ".fuzzloom"), { recursive: true });
-  link(victim, join(root, ".fuzzloom", "tmp"));
+  if (!link(t, victim, join(root, ".fuzzloom", "tmp"))) return;
   assert.throws(() => workDir(root), /is a symlink/);
 });
 

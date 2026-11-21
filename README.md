@@ -1,5 +1,5 @@
 <p align="center">
-  <img src="assets/readme-banner.svg" alt="Fuzzloom: property-based testing, fuzzing and EVM/native differential testing for Fe. vault-math, seed 7: 4 of 4 planted bugs found and shrunk. First sonatina/native divergence pinned in 8 single-test fe runs. 94 Fe tests pass on both backends." width="100%">
+  <img src="assets/readme-banner.svg" alt="Fuzzloom: property-based testing, fuzzing and EVM/native differential testing for Fe. vault-math, seed 7: 4 of 4 planted bugs found and shrunk. Sonatina/native mismatch verified in 8 fe invocations. 97 Fe tests pass on both backends." width="100%">
 </p>
 
 <p align="center">
@@ -7,8 +7,8 @@
   <a href="#testing"><img alt="CI: CircleCI" src="https://img.shields.io/badge/CI-CircleCI-eef0f3?logo=circleci&labelColor=0b0d12"></a>
   <a href="#quick-start"><img alt="fe 26.6" src="https://img.shields.io/badge/fe-26.6-eef0f3?labelColor=0b0d12"></a>
   <a href="#quick-start"><img alt="Node 22.18+" src="https://img.shields.io/badge/node-22.18%2B-eef0f3?labelColor=0b0d12"></a>
-  <a href="#testing"><img alt="Fe tests: 94 on both backends" src="https://img.shields.io/badge/Fe%20tests-94%20%C3%97%202%20backends-5ad1ff?labelColor=0b0d12"></a>
-  <a href="#testing"><img alt="CLI tests: 79" src="https://img.shields.io/badge/CLI%20tests-79-eef0f3?labelColor=0b0d12"></a>
+  <a href="#testing"><img alt="Fe tests: 97 on both backends" src="https://img.shields.io/badge/Fe%20tests-97%20%C3%97%202%20backends-5ad1ff?labelColor=0b0d12"></a>
+  <a href="#testing"><img alt="CLI test cases: 81" src="https://img.shields.io/badge/CLI%20test%20cases-81-eef0f3?labelColor=0b0d12"></a>
   <a href="#at-a-glance"><img alt="Runtime dependencies: 0" src="https://img.shields.io/badge/runtime%20dependencies-0-eef0f3?labelColor=0b0d12"></a>
   <a href="#license"><img alt="License: Apache-2.0" src="https://img.shields.io/badge/license-Apache--2.0-eef0f3?labelColor=0b0d12"></a>
 </p>
@@ -65,7 +65,7 @@ FAIL  prop_withdraw_never_overdraws(u128, u128)  counterexample at input 19
 - **The algorithms are written in Fe.** The random generator, the boundary-biased and correlated input generation, the shrinker, the mutation engine and the differential digests are a Fe library ([`ingots/fuzzloom`](ingots/fuzzloom/src)). They run on whichever backend executes the test. The TypeScript CLI discovers targets, writes the test harnesses, runs `fe test`, decodes the results and stores failures.
 - **It recovers inputs that Fe cannot report.** Fe cannot catch a panic, so an overflow or a division by zero ends the test with no input in the payload. Fuzzloom's input stream is a pure function of the seed and the iteration. A k-ary search on the run count finds the aborting input exactly, and shrinking by replay makes it small.
 - **It understands Fe's effects.** Properties can declare `uses (ledger: mut Ledger, policy: FeePolicy)`. Fuzzloom builds each effect from a `fixture_*()` function in your ingot, fresh for every evaluation, so replay and shrinking stay exact.
-- **It compares both backends with very few compiles.** One Fe test emits 256 checkpoint digests from a single pass. The first differing output among 100,000 inputs is pinned in 8 single-test `fe` runs.
+- **It compares both backends with very few compiles.** One Fe test emits 256 checkpoint digests from a single pass. For the vault-math seed-7 campaign, it verifies the differing output at input 269 in eight `fe` invocations.
 - **It refuses to guess.** A compile error, out-of-gas, a timeout or unreadable output is reported as an infrastructure error with exit code 2, never as a failing property or a backend mismatch.
 
 ## What it found
@@ -179,10 +179,10 @@ ok    Project           ingot token_ledger: 4 prop_* and 1 diff_* functions, 0 s
 git clone https://github.com/MikeMoulder/fuzzloom && cd fuzzloom
 npm ci                          # dev dependencies only (TypeScript, @types/node); the CLI has no runtime dependencies
 fe check                        # build: the Fe library and the three examples compile
-fe test                         # 94 Fe tests on sonatina, the EVM backend
-fe test --backend native        # the same 94 tests on the native backend (Linux, macOS, or WSL on Windows)
+fe test                         # 97 Fe tests on sonatina, the EVM backend
+fe test --backend native        # the same 97 tests on the native backend (Linux, macOS, or WSL on Windows)
 npm run typecheck               # the CLI's TypeScript
-npm test                        # 79 CLI tests, including integration runs through real fe on both backends
+npm test                        # CLI unit tests and integration runs through real fe on both backends
 node packages/cli/src/index.ts fuzz examples/vault-math --seed 7    # a demo: 3 passed, 4 failed (the planted bugs)
 bash scripts/ci.sh              # all of the above plus formatting, packaging and the three seeded demos, as CI runs it
 ```
@@ -244,13 +244,14 @@ The [guide](docs/guide.md) covers each of these in detail, with the failure mess
 | `fuzzloom doctor [path]` | Checks Node, fe and its version, that the bundled library compiles with your fe, the native backend, and the project's targets |
 | `fuzzloom list [path]` | Lists every target with its signature, effects, fixtures and declared ranges, and every skipped function with the reason |
 | `fuzzloom fuzz [path]` | Runs every property campaign, plus one mutation campaign per saved failure, then recovers and shrinks any abort |
-| `fuzzloom diff [path]` | Digests every differential target on sonatina and native and pins the first diverging input |
+| `fuzzloom diff [path]` | Compares keyed checkpoints on sonatina and native and verifies the located mismatch |
 | `fuzzloom reproduce <id> [path]` | Replays one saved failure from its stored input, with no random generation involved |
 | `fuzzloom replay [path]` | Replays every saved failure: `FIXED` when it now passes, `FAILS` when it still fails, `REGRESSED` when a fixed failure is back |
 
 | Option | Meaning |
 |---|---|
-| `--seed <n>` | Base seed. Default: random, printed so the run can be repeated exactly |
+| `--seed <n>` | Base seed. The CLI prints the seed so the input stream can be repeated |
+| `--digest-key <n>` | Reuse the recorded checkpoint key for `diff`. The default is sampled independently of the campaign seed |
 | `--runs <n>` | Inputs per property (default 10,000) or per differential target (default 100,000) |
 | `--backend <b>` | `sonatina` (EVM, default) or `native` |
 | `--only <text>` | Only targets, or saved failures for `replay`, whose name contains the text |
@@ -325,7 +326,7 @@ Every non-trivial algorithm states what it guarantees and where it stops, and ha
 | **In-Fe shrinking** | `shrink.fe` | Exact sweep of the 256 smallest values, then greedy descent by `2^k`, then joint moves (all to the floor, divide by the gcd or 2, subtract the same `2^k`). When complete, a local minimum under all those moves | Local, not global; 5,000 evaluations by default |
 | **Abort recovery** | CLI engine | The first abort is at the same iteration for every run count past it, so k-ary search finds it exactly in at most `ceil(log_(k+1)(runs))` rounds | Needs the property to be deterministic |
 | **Shrink by replay** | CLI engine | Every zero, power-of-two shift and joint move of the result is replayed. When complete, none of them reproduces the same abort | Local minimum; 8 rounds by default |
-| **Differential digests** | `diff.fe` | An order-sensitive fold, so prefix digests are consistent and "differs at k inputs" is monotone in k | A checksum, not a cryptographic hash |
+| **Differential digests** | `diff.fe` | A keyed polynomial fingerprint of each output prefix. Recovery verifies different outputs on the same input | Collisions can hide a mismatch or an earlier occurrence |
 | **Checkpoints** | `diff.fe` | Element j equals the digest after `first + j * step` inputs exactly, from one pass | 256 checkpoints per payload |
 | **Mutation** | `mutate.fe` | Mutants stay within bounds and are prefix-consistent, so an aborting mutation campaign is recovered like any other | Value-level operators; no dictionary of constants from your code |
 
@@ -333,10 +334,10 @@ Every non-trivial algorithm states what it guarantees and where it stops, and ha
 
 A differential target must return the same value on sonatina and native for every input. Fuzzloom checks that without moving 100,000 outputs out of the EVM:
 
-1. Each backend folds its outputs into one 256-bit digest, `acc = (acc ^ out) * FNV_PRIME + FNV_OFFSET` (wrapping), over the same input stream.
-2. The first round asks for 256 **checkpoints**: the digest after `k` inputs for 256 evenly spaced values of `k`, ending at 100,000. One test on each backend returns all of them in one pass, and any differing checkpoint proves a divergence.
-3. Because the fold is order-sensitive and the stream is deterministic, "the digests differ after k inputs" is false and then true as k grows. A k-ary search over checkpoint rounds narrows 100,000 inputs to one: the first round leaves at most 390 candidates, the second at most 1, and the third settles it.
-4. One last round regenerates that input and evaluates it on both backends, so the report shows the input and both outputs.
+1. Each backend folds its outputs over the same input stream with the same independently sampled key. Each output contributes three coefficients to a polynomial over the field modulo `2^127 - 1`.
+2. The first round asks for up to 256 **checkpoints** at evenly spaced input counts ending at the run budget. One test per target on each backend returns the whole batch in one pass.
+3. If the queried fingerprints do not collide, checkpoint comparison is monotone. At 100,000 inputs, k-ary search leaves at most 390 candidates after the first round and at most one unresolved candidate after the second.
+4. One last round evaluates the candidate on both backends. A finding requires identical inputs and different outputs. Equal checkpoints are evidence of agreement, with the collision bound described in [Differential digests and checkpoints](docs/algorithms.md#7-differential-digests-and-checkpoints). To repeat both the input stream and the checkpoint comparisons, use the reported `--seed` and `--digest-key`.
 
 That is three search rounds of one test per backend plus the recovery round: 8 `fe` runs in total, both backends running at the same time. The search probes are an arithmetic progression, so one checkpoint test can answer a whole round. An abort while digesting is reported as an abort in your code, never as a backend difference.
 
@@ -355,7 +356,7 @@ Measured on an Intel i7-1185G7 laptop (8 threads, 7 GB, WSL Ubuntu 24.04), fe 26
 
 Batching was measured as an A/B on the same machine under the same load: `fuzz` went from 184 s to 75 s and `diff` from 264 s to 52 s, with identical findings. Checkpoints then cut the divergence search from 12 `fe` runs of up to 21 tests each to 8 runs of one test.
 
-Two Fe-specific limits shape campaign sizes. `fe test` caps each EVM test at 10^9 gas, and the 100,000-input digest of `diff_net_position` fits with room to spare: a digest fits about 290,000 runs. Out-of-gas is reported as an infrastructure error, never as a divergence.
+`fe test` caps each EVM test at 10^9 gas. On Fe 26.6.0, with seed 7 and key `2^127 - 3`, one keyed `diff_net_position` checkpoint fit at 200,000 inputs and ran out of gas at 250,000. The default 100,000-input vault-math campaign completed across all four targets on both backends. Out-of-gas is reported as an infrastructure error.
 
 ## What Fuzzloom does not do
 
@@ -370,9 +371,9 @@ Two Fe-specific limits shape campaign sizes. `fe test` caps each EVM test at 10^
 
 | Suite | Count | What it covers |
 |---|---|---|
-| Fe library and examples | **94 tests, run on sonatina and on native** | PRNG streams and known answers, unbiased sampling, every generator, every shrink guarantee, prefix consistency, digest and checkpoint exactness, mutation bounds, a known-answer digest recorded identically from both backends |
-| CLI | **79 tests** | Discovery (effects, fixtures, ranges, modules), saved-failure validation and symlink refusal (each replaying a security-audit exploit), harness generation for every mode, payload decoding, output parsing from real `fe` output, the k-ary search bound swept over every answer position, both replay shrinkers, JUnit, doctor, and integration tests that run real `fe` on both backends |
-| Pipeline | [`scripts/ci.sh`](scripts/ci.sh) | Installs Fe, checks formatting, runs both suites, packs the npm package and runs it outside the repo, then asserts that all three examples reproduce their documented seed-7 results |
+| Fe library and examples | **97 tests, run on sonatina and on native** | PRNG streams and known answers, unbiased sampling, every generator, every shrink guarantee, prefix consistency, digest and checkpoint exactness, mutation bounds, a known-answer digest recorded identically from both backends |
+| CLI | **81 test cases** | Discovery (effects, fixtures, ranges, modules), saved-failure validation and symlink refusal (each replaying a security-audit exploit), harness generation for every mode, payload decoding, output parsing from real `fe` output, the k-ary search bound swept over every answer position, both replay shrinkers, JUnit, doctor, and integration tests that run real `fe` on both backends |
+| Pipeline | [`scripts/ci.sh`](scripts/ci.sh) | Installs Fe, checks formatting, runs both suites, then runs the three seed-7 examples through the installed package. Vault-math runs from a clean copy outside the repository |
 
 The commands for each suite are in [Build and test from source](#build-and-test-from-source). CI runs `scripts/ci.sh` on CircleCI, and the same script runs locally:
 
