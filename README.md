@@ -4,7 +4,7 @@
 
 <p align="center">
   <a href="https://www.npmjs.com/package/fuzzloom"><img alt="npm: fuzzloom" src="https://img.shields.io/npm/v/fuzzloom?color=e8ff5a&labelColor=0b0d12"></a>
-  <a href="#testing"><img alt="CI: CircleCI" src="https://img.shields.io/badge/CI-CircleCI-eef0f3?logo=circleci&labelColor=0b0d12"></a>
+  <a href="https://app.circleci.com/workflow/4e527af1-d349-407a-9969-f9cd929b8b87/job/f13c7c4d-67ef-4ca2-86cf-6dc73a2152f5"><img alt="CircleCI passed for 3907b00" src="https://img.shields.io/badge/CircleCI-3907b00%20passed-eef0f3?logo=circleci&labelColor=0b0d12"></a>
   <a href="#quick-start"><img alt="fe 26.6" src="https://img.shields.io/badge/fe-26.6-eef0f3?labelColor=0b0d12"></a>
   <a href="#quick-start"><img alt="Node 22.18+" src="https://img.shields.io/badge/node-22.18%2B-eef0f3?labelColor=0b0d12"></a>
   <a href="#testing"><img alt="Fe tests: 97 on both backends" src="https://img.shields.io/badge/Fe%20tests-97%20%C3%97%202%20backends-5ad1ff?labelColor=0b0d12"></a>
