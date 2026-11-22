@@ -1,5 +1,5 @@
 <p align="center">
-  <img src="assets/readme-banner.svg" alt="Fuzzloom: property-based testing, fuzzing and EVM/native differential testing for Fe. vault-math, seed 7: 4 of 4 planted bugs found and shrunk. Sonatina/native mismatch verified in 8 fe invocations. 97 Fe tests pass on both backends." width="100%">
+  <img src="assets/readme-banner.svg" alt="Fuzzloom: property-based testing, fuzzing and EVM/native differential testing for Fe. vault-math, seed 7: 4 of 4 planted bugs found and shrunk. Sonatina/native mismatch verified in 8 fe invocations. 100 Fe tests pass on both backends." width="100%">
 </p>
 
 <p align="center">
@@ -7,7 +7,7 @@
   <a href="https://app.circleci.com/workflow/4e527af1-d349-407a-9969-f9cd929b8b87/job/f13c7c4d-67ef-4ca2-86cf-6dc73a2152f5"><img alt="CircleCI passed for 3907b00" src="https://img.shields.io/badge/CircleCI-3907b00%20passed-eef0f3?logo=circleci&labelColor=0b0d12"></a>
   <a href="#quick-start"><img alt="fe 26.6" src="https://img.shields.io/badge/fe-26.6-eef0f3?labelColor=0b0d12"></a>
   <a href="#quick-start"><img alt="Node 22.18+" src="https://img.shields.io/badge/node-22.18%2B-eef0f3?labelColor=0b0d12"></a>
-  <a href="#testing"><img alt="Fe tests: 97 on both backends" src="https://img.shields.io/badge/Fe%20tests-97%20%C3%97%202%20backends-5ad1ff?labelColor=0b0d12"></a>
+  <a href="#testing"><img alt="Fe tests: 100 on both backends" src="https://img.shields.io/badge/Fe%20tests-100%20%C3%97%202%20backends-5ad1ff?labelColor=0b0d12"></a>
   <a href="#testing"><img alt="CLI test cases: 81" src="https://img.shields.io/badge/CLI%20test%20cases-81-eef0f3?labelColor=0b0d12"></a>
   <a href="#at-a-glance"><img alt="Runtime dependencies: 0" src="https://img.shields.io/badge/runtime%20dependencies-0-eef0f3?labelColor=0b0d12"></a>
   <a href="#license"><img alt="License: Apache-2.0" src="https://img.shields.io/badge/license-Apache--2.0-eef0f3?labelColor=0b0d12"></a>
@@ -179,8 +179,8 @@ ok    Project           ingot token_ledger: 4 prop_* and 1 diff_* functions, 0 s
 git clone https://github.com/MikeMoulder/fuzzloom && cd fuzzloom
 npm ci                          # dev dependencies only (TypeScript, @types/node); the CLI has no runtime dependencies
 fe check                        # build: the Fe library and the three examples compile
-fe test                         # 97 Fe tests on sonatina, the EVM backend
-fe test --backend native        # the same 97 tests on the native backend (Linux, macOS, or WSL on Windows)
+fe test                         # 100 Fe tests on sonatina, the EVM backend
+fe test --backend native        # the same 100 tests on the native backend (Linux, macOS, or WSL on Windows)
 npm run typecheck               # the CLI's TypeScript
 npm test                        # CLI unit tests and integration runs through real fe on both backends
 node packages/cli/src/index.ts fuzz examples/vault-math --seed 7    # a demo: 3 passed, 4 failed (the planted bugs)
@@ -256,6 +256,7 @@ The [guide](docs/guide.md) covers each of these in detail, with the failure mess
 | `--backend <b>` | `sonatina` (EVM, default) or `native` |
 | `--only <text>` | Only targets, or saved failures for `replay`, whose name contains the text |
 | `--no-corpus` | `fuzz` without the mutation campaigns around saved failures |
+| `--uniform` | `fuzz` with independent uniform draws within each declared range and corpus mutation disabled |
 | `--json` | Machine-readable output |
 | `--junit <file>` | Also write a JUnit XML report: findings are `<failure>`, infrastructure problems are `<error>` |
 
@@ -343,6 +344,8 @@ That is three search rounds of one test per backend plus the recovery round: 8 `
 
 ## Performance
 
+The [experiment notes](docs/experiments.md) record the Fe integer parity matrix and the paired uniform-versus-biased sampling measurements.
+
 Every `fe test` invocation pays a fixed compile cost, about 2.4 s on an idle machine, plus about 85 ms per extra test. Fuzzloom therefore batches every independent evaluation into one generated ingot. It picks the k-ary search width from that cost model, which gives width 21 for 10,000 runs: 3 rounds instead of the 14 steps of bisection.
 
 Measured on an Intel i7-1185G7 laptop (8 threads, 7 GB, WSL Ubuntu 24.04), fe 26.6.0, seed 7, as run by [`scripts/ci.sh`](scripts/ci.sh):
@@ -362,7 +365,7 @@ Batching was measured as an A/B on the same machine under the same load: `fuzz` 
 
 - **Fuzzing is not a proof.** A passing campaign means 10,000 well-chosen inputs found nothing, and `Passed` reports exactly what was exercised (edge draws, correlated inputs, which argument bounds were reached). It does not mean the property holds for every input.
 - **No coverage guidance yet.** Generation is boundary-biased and correlated, and mutation is seeded from saved failures, but nothing steers by which branches ran.
-- **No sequences of calls.** Every evaluation gets fresh fixtures by design, which keeps replay exact. A bug that needs a particular sequence of calls is out of scope for now.
+- **Stateful sequences run in Fe tests.** The Fe library generates, evaluates and shrinks sequences of up to eight steps with one fresh fixture per replay. See [stateful sequences](docs/guide.md#stateful-sequences).
 - **Integers and bool only, 1 to 3 arguments.** No structs, arrays, addresses or strings as generated inputs yet.
 - **Contract-level differential testing is out of scope.** Deploying a contract has no native counterpart, so `diff` compares shared logic, not deployed contracts.
 - **Local minima, not global ones.** Both shrinkers state exactly which moves they tried. The vesting example shrinks `total` to about 1.5 times the exact overflow threshold, and the guide shows why.
@@ -371,7 +374,7 @@ Batching was measured as an A/B on the same machine under the same load: `fuzz` 
 
 | Suite | Count | What it covers |
 |---|---|---|
-| Fe library and examples | **97 tests, run on sonatina and on native** | PRNG streams and known answers, unbiased sampling, every generator, every shrink guarantee, prefix consistency, digest and checkpoint exactness, mutation bounds, a known-answer digest recorded identically from both backends |
+| Fe library and examples | **100 tests, run on sonatina and on native** | PRNG streams and known answers, unbiased sampling, every generator, every shrink guarantee, prefix consistency, digest and checkpoint exactness, mutation bounds, a known-answer digest recorded identically from both backends |
 | CLI | **81 test cases** | Discovery (effects, fixtures, ranges, modules), saved-failure validation and symlink refusal (each replaying a security-audit exploit), harness generation for every mode, payload decoding, output parsing from real `fe` output, the k-ary search bound swept over every answer position, both replay shrinkers, JUnit, doctor, and integration tests that run real `fe` on both backends |
 | Pipeline | [`scripts/ci.sh`](scripts/ci.sh) | Installs Fe, runs formatting and tests, then checks all three examples through the installed checkout package. A separate smoke test installs a pinned npm release and runs vault-math fuzz on each backend and diff across both |
 
@@ -403,9 +406,9 @@ docs/                     guide, architecture, algorithms
 
 Fuzzloom is **alpha**, built for the Fe Builders Challenge 2026 and tested hard.
 
-- **Real and tested:** everything above, on fe 26.6.0, on both backends, through CI and through the published npm package.
+- **Real and tested:** everything above, on fe 26.6.0, on both backends in local verification. CI separately checks the published npm package.
 - **Verified platforms:** Linux; Windows with the native backend through WSL. macOS uses the same code paths as Linux but has not been run by us.
-- **Next:** coverage-guided feedback, stateful call sequences, structured inputs (arrays, addresses), campaigns split across tests to go past the gas cap, and filing the compiler crash upstream.
+- **Next:** coverage-guided feedback, CLI discovery and replay of stateful sequences, structured inputs (arrays, addresses), campaigns split across tests to go past the gas cap, and filing the compiler crash upstream.
 
 ## Contributing
 
