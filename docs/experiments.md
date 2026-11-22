@@ -1,5 +1,23 @@
 # Backend parity and sampling experiments
 
+## Exact 8-bit shift oracle
+
+Run `node scripts/check-shift-oracle.mjs` with Fe 26.6.0 (`5b3f96a`). The BigInt model computes left shift with multiplication and truncation, and arithmetic right shift with division rounded toward negative infinity. It generates exact expected bytes, then Fe compares every computed byte directly. Unsigned cases cover all 256 input bytes and all 256 shift counts. Signed cases cover all 256 input bytes and the 128 nonnegative counts representable by `i8`. Both operators are exercised on both backends.
+
+| Operation | Exact comparisons per backend | Sonatina | Native |
+| --- | ---: | --- | --- |
+| `u8 <<` | 65,536 | Matched | Matched |
+| `u8 >>` | 65,536 | Matched | Matched |
+| `i8 <<` | 32,768 | Matched | Matched |
+| `i8 >>` | 32,768 | Matched | Matched |
+| Corrupted expected byte at input 0, count 0 | 1 | Detected | Detected |
+
+The Fe harness still evaluates counts above the bit width. The expected table reuses row 8 because the reference saturates there. The negative control verifies that a disagreement reports the concrete input, expected byte, and observed byte.
+
+## Published CLI against another Fe project
+
+`bash scripts/check-external-ingot.sh /path/to/fuzzloom` creates a temporary consumer for the pinned [Fe Keccak ingot](https://github.com/fe-lang/keccak/tree/345d5088de986fe54b23a6aaa3a33e1c349d0960). The public npm 0.1.2 package discovered both targets. On Fe 26.6.0, each backend passed 32 streaming checks against the Ethereum Keccak-256 digest of `abc`, and 128 single-byte hash inputs agreed across the backends. The Fuzzloom pipeline includes this check. The upstream library remains an external dependency of this test.
+
 ## Fe integer semantics on Fe 26.6.0
 
 `node scripts/check-integer-semantics.mjs` generates and compares Fe functions that call the compiler's actual integer operators. Seed 7 exercised 100,000 boundary-biased inputs per operation and type. All **116 keyed checkpoint campaigns** agreed across Sonatina and native, for **11.6 million input pairs**, and all **762 explicit edge evaluations** agreed. Backend agreement covers the sampled inputs and the reported outcomes.
