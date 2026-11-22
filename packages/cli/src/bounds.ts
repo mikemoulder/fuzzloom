@@ -22,7 +22,7 @@ import type { FeType } from "./types.ts";
 export type ArgBound = { arg: number; lo: bigint; hi: bigint };
 
 const ANNOTATION = /fuzzloom:\s*(\w+)\s+in\s+(-?[0-9a-fA-Fx_]+)\s*(\.\.=?)\s*(-?[0-9a-fA-Fx_]+)\s*$/;
-const NUMBER = /^-?(0x[0-9a-fA-F_]+|[0-9_]+)$/;
+const NUMBER = /^-?(0x[0-9a-fA-F]+(?:_[0-9a-fA-F]+)*|[0-9]+(?:_[0-9]+)*)$/;
 
 function parseNumber(s: string): bigint | undefined {
   if (!NUMBER.test(s)) return undefined;

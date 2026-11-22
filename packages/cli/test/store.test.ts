@@ -85,6 +85,7 @@ test("validateRecord rejects input words that are not hex for every argument", (
   const r = record();
   assert.throws(() => validateRecord({ ...r, input: ["0x1"] }), /one lowercase hex word per argument/);
   assert.throws(() => validateRecord({ ...r, input: ["-5", "0x1"] }), /one lowercase hex word per argument/);
+  assert.throws(() => validateRecord({ ...r, input: ["0x10000000000000000", "0x1"] }), /does not fit u64/);
   assert.throws(() => validateRecord({ ...r, args: [{ name: "a; rm", type: "u64" }, r.args[1]] }), /invalid argument/);
   assert.throws(() => validateRecord({ ...r, version: 2 }), /version 2/);
 });

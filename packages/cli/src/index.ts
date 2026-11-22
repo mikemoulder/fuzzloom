@@ -3,7 +3,7 @@
 
 import { parseArgs } from "node:util";
 import { randomBytes } from "node:crypto";
-import { resolve } from "node:path";
+import { basename, join, resolve } from "node:path";
 import { discover } from "./discover.ts";
 import { defaultFeConfig, feVersion } from "./fe.ts";
 import { describeAbort, runCases, runDiffs, runProperties, workDir, type Context, type DiffResult, type PropertyResult, type Seed } from "./engine.ts";
@@ -13,7 +13,8 @@ import { bold, dim, formatResult, green, red, toJson, values, yellow } from "./r
 import { wordToValue } from "./abi.ts";
 import { checks } from "./doctor.ts";
 import { junitXml, type JUnitCase, type JUnitOutcome } from "./junit.ts";
-import { existsSync, rmSync, writeFileSync } from "node:fs";
+import { existsSync, mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
+import { safeDir } from "./paths.ts";
 import type { Discovery } from "./discover.ts";
 import type { Backend, Outcome, Target } from "./types.ts";
 
@@ -42,6 +43,7 @@ Options:
 Exit codes: 0 all passed, 1 a property failed or aborted, 2 infrastructure error.`;
 
 type Opts = { seed?: string; "digest-key"?: string; runs?: string; backend: string; only?: string; json: boolean; "no-corpus": boolean; uniform: boolean; junit?: string };
+type RunOpts = Opts & { scratchDir: string };
 
 /** Most saved failures seeding mutation campaigns, per property (most recently updated first). */
 const SEEDS_PER_TARGET = 8;
@@ -72,17 +74,20 @@ async function main(argv: string[]): Promise<number> {
   if (opts.backend !== "sonatina" && opts.backend !== "native") throw new Error(`unknown backend ${opts.backend}`);
   if (opts["digest-key"] !== undefined && command !== "diff") throw new Error("--digest-key requires diff");
   if (opts.uniform && command !== "fuzz") throw new Error("--uniform requires fuzz");
+  if (opts.seed !== undefined) uint64Option("--seed", opts.seed, 0n);
+  if (opts.runs !== undefined) uint64Option("--runs", opts.runs, 1n);
+  if (opts.only !== undefined && !opts.only.trim()) throw new Error("--only requires a nonempty target filter");
   const pathArg = (i: number) => resolve(positionals[i] ?? ".");
   switch (command) {
     case "doctor": return doctor(positionals[1] ? pathArg(1) : undefined, opts);
     case "list": return list(pathArg(1), opts);
-    case "fuzz": return scratch(pathArg(1), opts, fuzz(pathArg(1), opts));
-    case "diff": return scratch(pathArg(1), opts, diff(pathArg(1), opts));
-    case "replay": return scratch(pathArg(1), opts, replayAll(pathArg(1), opts));
+    case "fuzz": return scratch(pathArg(1), opts, fuzz);
+    case "diff": return scratch(pathArg(1), opts, diff);
+    case "replay": return scratch(pathArg(1), opts, replayAll);
     case "reproduce": {
       const id = positionals[1];
       if (!id) throw new Error("reproduce needs a failure id (see .fuzzloom/failures/)");
-      return scratch(pathArg(2), opts, reproduce(pathArg(2), id, opts));
+      return scratch(pathArg(2), opts, (root, options) => reproduce(root, id, options));
     }
     default:
       console.error(`unknown command ${command}\n\n${USAGE}`);
@@ -96,15 +101,29 @@ async function main(argv: string[]): Promise<number> {
  * `fe test`. They are kept after an infrastructure error (exit 2), where the
  * generated code is what you need to debug it.
  */
-async function scratch(root: string, opts: Opts, run: Promise<number>): Promise<number> {
-  const code = await run;
-  const dir = workDir(root);
-  if (code === 2) {
-    if (existsSync(dir) && !opts.json) console.error(dim(`generated harnesses kept for debugging in ${dir}`));
-  } else {
-    rmSync(dir, { recursive: true, force: true });
+async function scratch(root: string, opts: Opts, run: (root: string, options: RunOpts) => Promise<number>): Promise<number> {
+  if (!existsSync(join(root, "fe.toml"))) throw new Error(`no fe.toml in ${root}`);
+  const base = workDir(root);
+  mkdirSync(base, { recursive: true });
+  const scratchDir = mkdtempSync(join(base, "run-"));
+  let code: number | undefined;
+  try {
+    code = await run(root, { ...opts, scratchDir });
+    return code;
+  } finally {
+    if (code === 2) {
+      if (!opts.json) console.error(dim(`generated harnesses kept for debugging in ${scratchDir}`));
+    } else {
+      const dir = safeDir(root, ".fuzzloom", "tmp", basename(scratchDir));
+      if (dir === scratchDir) rmSync(dir, { recursive: true, force: true });
+    }
   }
-  return code;
+}
+
+function uint64Option(option: string, text: string, min: bigint): void {
+  if (!/^(?:[0-9]+|0x[0-9a-f]+)$/i.test(text)) throw new Error(`${option} must be an unsigned 64-bit integer`);
+  const value = BigInt(text);
+  if (value < min || value >= 1n << 64n) throw new Error(`${option} must be in ${min}..=18446744073709551615`);
 }
 
 function doctor(root: string | undefined, opts: Opts): number {
@@ -145,7 +164,7 @@ function list(root: string, opts: Opts): number {
   return 0;
 }
 
-async function fuzz(root: string, opts: Opts): Promise<number> {
+async function fuzz(root: string, opts: RunOpts): Promise<number> {
   const d = discover(root);
   const base = baseSeed(opts);
   const runs = BigInt(opts.runs ?? "10000");
@@ -153,9 +172,10 @@ async function fuzz(root: string, opts: Opts): Promise<number> {
   const fe = defaultFeConfig();
   const version = feVersion(fe);
   const targets = d.targets.filter((t) => t.kind === "property" && (!opts.only || t.name.includes(opts.only)));
+  if (targets.length === 0) throw new Error(`no runnable prop_* targets${opts.only ? ` matching "${opts.only}"` : ""}; use fuzzloom list`);
   const ctx: Context = {
     userRoot: root, ingot: d.ingot, backend, fe,
-    onRun: progress(opts), uniform: opts.uniform,
+    onRun: progress(opts), uniform: opts.uniform, scratchDir: opts.scratchDir,
   };
   const seeds = opts["no-corpus"] || opts.uniform ? new Map<string, Seed[]>() : seedsFrom(root, d, targets);
   const seeded = [...seeds.values()].reduce((a, s) => a + s.length, 0);
@@ -261,7 +281,7 @@ function digestKey(requested: string | undefined): bigint {
   return key;
 }
 
-async function diff(root: string, opts: Opts): Promise<number> {
+async function diff(root: string, opts: RunOpts): Promise<number> {
   const d = discover(root);
   const base = baseSeed(opts);
   const key = digestKey(opts["digest-key"]);
@@ -269,7 +289,8 @@ async function diff(root: string, opts: Opts): Promise<number> {
   const fe = defaultFeConfig();
   const version = feVersion(fe);
   const targets = d.targets.filter((t) => t.kind === "differential" && (!opts.only || t.name.includes(opts.only)));
-  const ctx: Context = { userRoot: root, ingot: d.ingot, backend: "sonatina", fe, onRun: progress(opts) };
+  if (targets.length === 0) throw new Error(`no runnable diff_* targets${opts.only ? ` matching "${opts.only}"` : ""}; use fuzzloom list`);
+  const ctx: Context = { userRoot: root, ingot: d.ingot, backend: "sonatina", fe, onRun: progress(opts), scratchDir: opts.scratchDir };
   if (!opts.json) console.log(`${bold("fuzzloom diff")} ${d.ingot}  ${dim(`seed ${base}, digest key ${key}, ${runs} inputs per target, sonatina vs native, ${version}`)}`);
   const started = Date.now();
   const results: { result: DiffResult; record?: string }[] = [];
@@ -386,10 +407,10 @@ function applyVerdict(root: string, rec: FailureRecord, v: Verdict): string {
   return v.reproduces ? red("FAILS") : green("FIXED");
 }
 
-async function reproduce(root: string, id: string, opts: Opts): Promise<number> {
+async function reproduce(root: string, id: string, opts: RunOpts): Promise<number> {
   const d = discover(root);
   const rec = loadRecord(root, id);
-  const ctx: Context = { userRoot: root, ingot: d.ingot, backend: "sonatina", fe: defaultFeConfig(), onRun: progress(opts) };
+  const ctx: Context = { userRoot: root, ingot: d.ingot, backend: "sonatina", fe: defaultFeConfig(), onRun: progress(opts), scratchDir: opts.scratchDir };
   const target = d.targets.find((x) => x.name === rec.target);
   const [v] = await verdicts(ctx, d, [rec]);
   const label = applyVerdict(root, rec, v!);
@@ -402,10 +423,11 @@ async function reproduce(root: string, id: string, opts: Opts): Promise<number> 
   return v!.reproduces === undefined ? 2 : v!.reproduces ? 1 : 0;
 }
 
-async function replayAll(root: string, opts: Opts): Promise<number> {
+async function replayAll(root: string, opts: RunOpts): Promise<number> {
   const d = discover(root);
   const records = listRecords(root).filter((r) => !opts.only || r.target.includes(opts.only));
-  const ctx: Context = { userRoot: root, ingot: d.ingot, backend: "sonatina", fe: defaultFeConfig(), onRun: progress(opts) };
+  if (opts.only !== undefined && records.length === 0) throw new Error(`no saved failures matching "${opts.only}"`);
+  const ctx: Context = { userRoot: root, ingot: d.ingot, backend: "sonatina", fe: defaultFeConfig(), onRun: progress(opts), scratchDir: opts.scratchDir };
   if (!opts.json) console.log(`${bold("fuzzloom replay")} ${d.ingot}  ${dim(`${records.length} saved failures`)}`);
   let failing = 0;
   let infra = 0;

@@ -28,10 +28,28 @@ export function ingotName(root: string): string {
   return name;
 }
 
-/** Blanks out comments while keeping offsets (so line numbers stay right). */
-export function stripComments(src: string): string {
-  return src.replace(/\/\*[\s\S]*?\*\//g, (m) => m.replace(/[^\n]/g, " "))
-            .replace(/\/\/[^\n]*/g, (m) => " ".repeat(m.length));
+/** Masks comments and literals while preserving offsets and line numbers. */
+function maskNonCode(src: string): string {
+  const tokens = /"(?:\\[\s\S]|[^"\\])*"|'(?:\\[^\r\n]|[^'\\\r\n])'|\/\/[^\n]*|\/\*/g;
+  const blocks = /\/\*|\*\//g;
+  const out: string[] = [];
+  let start = 0;
+  for (let m = tokens.exec(src); m; m = tokens.exec(src)) {
+    if (m[0] === "/*") {
+      blocks.lastIndex = tokens.lastIndex;
+      let depth = 1;
+      while (depth > 0) {
+        const delimiter = blocks.exec(src);
+        if (!delimiter) break;
+        depth += delimiter[0] === "/*" ? 1 : -1;
+      }
+      tokens.lastIndex = depth === 0 ? blocks.lastIndex : src.length;
+    }
+    out.push(src.slice(start, m.index), src.slice(m.index, tokens.lastIndex).replace(/[^\n]/g, " "));
+    start = tokens.lastIndex;
+  }
+  out.push(src.slice(start));
+  return out.join("");
 }
 
 const SIGNATURE = /\bpub\s+fn\s+((?:prop|diff)_\w+)\s*(<[^>]*>)?\s*\(([^)]*)\)\s*(?:->\s*([\w:]+))?\s*(uses\b[^{]*)?\{/g;
@@ -68,7 +86,7 @@ const USE_ONE = /\buse\s+([\w:]+)::(\w+)\s*(?:\n|$)/g;
 
 /** Fixtures, public types and `use` imports declared in one source text. */
 export function declarations(src: string): { fixtures: { name: string; returns: string }[]; types: string[]; uses: Map<string, string> } {
-  const clean = stripComments(src);
+  const clean = maskNonCode(src);
   const fixtures = [...clean.matchAll(FIXTURE)].map((m) => ({ name: m[1]!, returns: m[2]! }));
   const types = [...clean.matchAll(TYPE_DEF)].map((m) => m[1]!);
   const uses = new Map<string, string>();
@@ -95,7 +113,7 @@ function docAbove(src: string, line: number): string[] {
 
 /** Finds targets in one source text. */
 export function discoverSource(src: string, file: string): { targets: RawTarget[]; skipped: Skipped[] } {
-  const clean = stripComments(src);
+  const clean = maskNonCode(src);
   const targets: RawTarget[] = [];
   const skipped: Skipped[] = [];
   for (const m of clean.matchAll(SIGNATURE)) {

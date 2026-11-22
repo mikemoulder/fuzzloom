@@ -48,6 +48,15 @@ test("unknown selectors are infra, not results", () => {
   assert.equal(decodePayload("0xdeadbeef" + word(1n)).kind, "infra");
 });
 
+test("invalid booleans, truncated strings and misplaced tails cannot become results", () => {
+  const replay = selector("Replayed(uint64,uint256,uint256,uint256,bool)");
+  const cp = selector("Checkpoints(uint64,uint64,uint64,uint64,uint256[])");
+  assert.throws(() => decodePayload(replay + [1n, 0n, 0n, 0n, 2n].map(word).join("")), /boolean/);
+  assert.throws(() => decodePayload(cp + [1n, 1n, 1n, 1n, 161n, 1n, 0n].map(word).join("")), /offset/);
+  assert.throws(() => decodePayload("0x08c379a0" + word(32n) + word(4n)), /length/);
+  assert.throws(() => decodePayload("0x4e487b71"), /Panic payload/);
+});
+
 test("zigzag matches the Fe Word encoding", () => {
   // From ingots/fuzzloom/src/word.fe tests: 0, -1, 1, -2, 2 -> 0, 1, 2, 3, 4.
   assert.deepEqual([0n, 1n, 2n, 3n, 4n].map((w) => wordToValue(w, "i64")), [0n, -1n, 1n, -2n, 2n]);

@@ -29,11 +29,13 @@ fn prop_private(_ x: u8) -> bool { true }
   assert.equal(r.skipped.length, 0);
 });
 
-test("ignores signatures inside comments", () => {
+test("ignores signatures inside comments and literals, preserving discovery line numbers", () => {
   const src = `// pub fn prop_commented(_ x: u8) -> bool { true }
-/* pub fn prop_block(_ x: u8) -> bool { true } */
-pub fn prop_real(_ x: u8) -> bool { true }`;
-  assert.deepEqual(discoverSource(src, "f.fe").targets.map((t) => [t.name, t.line]), [["prop_real", 3]]);
+/* nested /* comment */ pub fn prop_block(_ x: u8) -> bool { true } */
+fn message() { let text = "/* pub fn prop_literal(_ x: u8) -> bool { true }" }
+pub fn prop_real(_ x: u8) -> bool { true }
+/* closing comment below the real target */`;
+  assert.deepEqual(discoverSource(src, "f.fe").targets.map((t) => [t.name, t.line]), [["prop_real", 4]]);
 });
 
 test("reports unsupported signatures with a reason instead of dropping them", () => {

@@ -21,7 +21,8 @@ export function safeDir(root: string, ...parts: string[]): string {
     let link: boolean;
     try {
       link = lstatSync(p).isSymbolicLink();
-    } catch {
+    } catch (error) {
+      if ((error as NodeJS.ErrnoException).code !== "ENOENT") throw error;
       return join(p, ...parts.slice(i + 1)); // the rest does not exist yet; it will be created as real directories
     }
     if (link) throw new Error(`refusing to use ${p}: it is a symlink, and Fuzzloom only writes inside the ingot`);

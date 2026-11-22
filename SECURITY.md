@@ -1,6 +1,6 @@
 # Security policy
 
-Fuzzloom is a developer tool. It reads your Fe sources, writes generated test ingots under `.fuzzloom/` inside your project, and runs the `fe` binary you have installed. It makes no network requests of its own, holds no keys and moves no funds.
+Fuzzloom is a developer tool. It reads your Fe sources, writes generated test ingots under `.fuzzloom/` inside your project, and runs the `fe` binary you have installed. Running an ingot and its dependencies has the same trust requirements as running them with `fe test` directly.
 
 ## What counts as a security issue
 
@@ -12,7 +12,7 @@ Fuzzloom is a developer tool. It reads your Fe sources, writes generated test in
 
 A project's `.fuzzloom/` directory, including its saved failures, is treated as untrusted input:
 
-- **Saved failures are validated before use.** A record's id must have the form Fuzzloom generates and match its file name, every field is checked, and a record is rebuilt from its known fields before it is written back. A record that fails validation is skipped with a warning, so one bad file never stops a run.
+- **Saved failures are validated before use.** A record's ID must match its filename, and its input words must fit the recorded argument types. Fuzzloom rebuilds records from known fields and publishes each replacement as a complete file. Batch replay skips invalid records with a warning.
 - **Symlinks are refused.** If `.fuzzloom`, `.fuzzloom/tmp` or `.fuzzloom/failures` is a symlink (or a Windows junction), Fuzzloom stops with an error before writing or deleting anything, so neither generated files nor the cleanup of `.fuzzloom/tmp` can reach outside the project.
 - **No shell sees your paths.** `fe` runs with an argument list, and on Windows the native backend runs through `wsl -e` with the project path as a separate argument, so quotes, `$` or `;` in a path are never parsed as shell syntax.
 

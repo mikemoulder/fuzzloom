@@ -72,6 +72,10 @@ test("narrow keeps exactly the undecided values", () => {
   assert.deepEqual(narrow(1n, 40n, ks, [false, false, false]), { lo: 31n, hi: 40n });
 });
 
+test("an incomplete replay batch cannot certify a shrink minimum", async () => {
+  await assert.rejects(shrinkByReplay(t2, [9n, 0n, 0n], 4, async () => []), /incomplete shrink replay/);
+});
+
 test("the first diff round fits one checkpoint case and leaves at most 39 of 10,000 run counts", () => {
   // Same construction as runDiffs: the first search round's probes plus runs itself.
   const runs = 10000n;

@@ -26,6 +26,8 @@ test("every mistake is an error, never a silently wider range", () => {
   assert.match(String(parseBounds(["/// fuzzloom: y in 1..=2"], a)), /not an argument/);
   assert.match(String(parseBounds(["/// fuzzloom: x in 1..=300"], a)), /does not fit u8/);
   assert.match(String(parseBounds(["/// fuzzloom: x in 5..=4"], a)), /empty/);
+  assert.match(String(parseBounds(["/// fuzzloom: x in _..=4"], a)), /cannot read the range/);
+  assert.match(String(parseBounds(["/// fuzzloom: x in 0x_..=4"], a)), /cannot read the range/);
   assert.match(String(parseBounds(["/// fuzzloom: x from 1 to 2"], a)), /cannot read the annotation/);
   assert.match(String(parseBounds(["/// fuzzloom: f in 0..=1"], a)), /bool/);
   assert.match(String(parseBounds(["/// fuzzloom: x in 1..=2", "/// fuzzloom: x in 3..=4"], a)), /more than one range/);

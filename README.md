@@ -8,7 +8,7 @@
   <a href="#quick-start"><img alt="fe 26.6" src="https://img.shields.io/badge/fe-26.6-eef0f3?labelColor=0b0d12"></a>
   <a href="#quick-start"><img alt="Node 22.18+" src="https://img.shields.io/badge/node-22.18%2B-eef0f3?labelColor=0b0d12"></a>
   <a href="#testing"><img alt="Fe tests: 100 on both backends" src="https://img.shields.io/badge/Fe%20tests-100%20%C3%97%202%20backends-5ad1ff?labelColor=0b0d12"></a>
-  <a href="#testing"><img alt="CLI test cases: 81" src="https://img.shields.io/badge/CLI%20test%20cases-81-eef0f3?labelColor=0b0d12"></a>
+  <a href="#testing"><img alt="CLI test cases: 85" src="https://img.shields.io/badge/CLI%20test%20cases-85-eef0f3?labelColor=0b0d12"></a>
   <a href="#at-a-glance"><img alt="Runtime dependencies: 0" src="https://img.shields.io/badge/runtime%20dependencies-0-eef0f3?labelColor=0b0d12"></a>
   <a href="#license"><img alt="License: Apache-2.0" src="https://img.shields.io/badge/license-Apache--2.0-eef0f3?labelColor=0b0d12"></a>
 </p>
@@ -252,11 +252,11 @@ The [guide](docs/guide.md) covers each of these in detail, with the failure mess
 |---|---|
 | `--seed <n>` | Base seed. The CLI prints the seed so the input stream can be repeated |
 | `--digest-key <n>` | Reuse the recorded checkpoint key for `diff`. The default is sampled independently of the campaign seed |
-| `--runs <n>` | Inputs per property (default 10,000) or per differential target (default 100,000) |
+| `--runs <n>` | Positive 64-bit input count per property (default 10,000) or differential target (default 100,000) |
 | `--backend <b>` | `sonatina` (EVM, default) or `native` |
-| `--only <text>` | Only targets, or saved failures for `replay`, whose name contains the text |
+| `--only <text>` | Select targets or saved failures whose name contains the text. An empty selection exits 2 |
 | `--no-corpus` | `fuzz` without the mutation campaigns around saved failures |
-| `--uniform` | `fuzz` with independent uniform draws within each declared range and corpus mutation disabled |
+| `--uniform` | `fuzz` with rejection sampling inside the declared ranges. Available from source. Disables edge bias, argument correlation and corpus mutation |
 | `--json` | Machine-readable output |
 | `--junit <file>` | Also write a JUnit XML report: findings are `<failure>`, infrastructure problems are `<error>` |
 
@@ -310,7 +310,7 @@ flowchart LR
 | `Panic(uint256)`, `Error(string)` | `0x4e487b71`, `0x08c379a0` | an abort from your code |
 
 5. **Anything else is infrastructure.** A compile error, an out-of-gas halt, a timeout, a missing backend, an unknown selector or a truncated payload is classified as such and stays attached to its own test. A test with no result line counts as an error, never as a pass.
-6. **Cleanup.** Generated harnesses are deleted when the command ends, so they never appear in your own `fe fmt --check` or `fe test`. After an infrastructure error they are kept, and their path is printed, because the generated code is what you need to debug it.
+6. **Cleanup.** Each invocation uses its own directory under `.fuzzloom/tmp`. It removes its harnesses on a successful run or a confirmed finding. Exit code 2 preserves that invocation's harnesses for diagnosis.
 
 [docs/architecture.md](docs/architecture.md) goes through each component, the harness format and the outcome classification in full.
 
@@ -320,7 +320,7 @@ Every non-trivial algorithm states what it guarantees and where it stops, and ha
 
 | Algorithm | Where | Guarantee | Limit |
 |---|---|---|---|
-| **xorshift64\*** PRNG, splitmix64 seed derivation | `rng.fe` | Same seed, same stream on every machine and backend; each property gets an independent stream | Not cryptographic |
+| **xorshift64\*** PRNG, splitmix64 seed derivation | `rng.fe` | Same seed, same stream on every machine and backend. Each property gets a seed derived from its name | 64 bits of state |
 | **Range sampling** | `rng.fe` | Uniform over `lo..=hi` by masked rejection sampling, with no modulo bias (tested on a range about 2/3 of 2^256) | At most 2 draws expected, in the worst case |
 | **Boundary bias** | `bias.fe` | One argument draw in four comes from the edges: both ends, their neighbours, the midpoint, and `2^k - 1`, `2^k`, `2^k + 1` inside the range | Edges are fixed patterns, not learned |
 | **Correlated draws** | `draw.fe` | One multi-argument draw in eight sets argument 1 to argument 0, or one above or below it, with an inverse fallback when widths differ | Only the first two arguments are related |
@@ -374,8 +374,8 @@ Batching was measured as an A/B on the same machine under the same load: `fuzz` 
 
 | Suite | Count | What it covers |
 |---|---|---|
-| Fe library and examples | **100 tests, run on sonatina and on native** | PRNG streams and known answers, unbiased sampling, every generator, every shrink guarantee, prefix consistency, digest and checkpoint exactness, mutation bounds, a known-answer digest recorded identically from both backends |
-| CLI | **81 test cases** | Discovery (effects, fixtures, ranges, modules), saved-failure validation and symlink refusal (each replaying a security-audit exploit), harness generation for every mode, payload decoding, output parsing from real `fe` output, the k-ary search bound swept over every answer position, both replay shrinkers, JUnit, doctor, and integration tests that run real `fe` on both backends |
+| Fe library and examples | **100 tests, run on sonatina and on native** | PRNG known answers, range sampling, input and shrink bounds, stateful fixture isolation, prefix consistency and differential fingerprint arithmetic |
+| CLI | **85 test cases** | Discovery, harness generation, ABI validation, per-test outcome parsing, k-ary search, replay, reporting, and integration tests against both Fe backends |
 | Pipeline | [`scripts/ci.sh`](scripts/ci.sh) | Installs Fe, runs formatting and tests, then checks all three examples through the installed checkout package. A separate smoke test installs a pinned npm release and runs vault-math fuzz on each backend and diff across both |
 
 The commands for each suite are in [Build and test from source](#build-and-test-from-source). CI runs `scripts/ci.sh` on CircleCI, and the same script runs locally:

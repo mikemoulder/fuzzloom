@@ -24,6 +24,8 @@ export type Context = {
   maxWidth?: number;
   /** Independent uniform argument draws, with corpus campaigns disabled. */
   uniform?: boolean;
+  /** Workspace owned by a single CLI invocation. */
+  scratchDir?: string;
 };
 
 export type Stats = { edgeArgs: bigint; correlated: bigint; extremes: bigint };
@@ -72,14 +74,44 @@ class Stop extends Error {
 /** Counts fe runs for one target. */
 type Meter = { feRuns: number };
 
+function verifyOutcome({ target, call }: Case, outcome: Outcome): Outcome {
+  const invalid = (detail: string): Outcome => ({ kind: "infra", reason: "unparsed", detail });
+  if ("arity" in outcome && outcome.arity !== target.args.length) return invalid("payload arity differs from the harness case");
+  switch (outcome.kind) {
+    case "passed":
+      if (call.mode !== "check" || outcome.runs !== call.runs) return invalid("pass payload does not match the campaign");
+      break;
+    case "counterexample":
+      if (call.mode !== "check" || outcome.iteration >= call.runs) return invalid("counterexample iteration is outside the campaign");
+      break;
+    case "checkpoints":
+      if (call.mode !== "checkpoints" || outcome.first !== call.first || outcome.step !== call.step || outcome.accs.length !== call.count) {
+        return invalid("checkpoint payload does not match the requested prefixes");
+      }
+      break;
+    case "generated":
+      if ((call.mode !== "input_at" && call.mode !== "target_input_at") || outcome.iteration !== call.iteration) {
+        return invalid("generated input payload does not match the requested iteration");
+      }
+      break;
+    case "replayed":
+    case "evaluated":
+      if ((call.mode === "replay" || call.mode === "evaluate") && outcome.input.some((word, i) => word !== call.input[i])) {
+        return invalid("payload reports a different input from the requested replay");
+      }
+      break;
+  }
+  return outcome;
+}
+
 /** Runs one round: every case in one harness, one fe run. */
 export async function runCases(ctx: Context, cases: Case[], label: string, backend: Backend = ctx.backend, meter?: Meter): Promise<Outcome[]> {
   const name = `${label}-${backend}`.replace(/[^\w-]/g, "_");
-  const dir = writeBatch({ userRoot: ctx.userRoot, ingot: ctx.ingot, cases, workDir: workDir(ctx.userRoot), name });
+  const dir = writeBatch({ userRoot: ctx.userRoot, ingot: ctx.ingot, cases, workDir: ctx.scratchDir ?? workDir(ctx.userRoot), name });
   const r = await runBatch(dir, cases.map((_, i) => caseName(i)), backend, ctx.fe);
   if (meter) meter.feRuns++;
   ctx.onRun?.(`${label} on ${backend}, ${cases.length} case${cases.length === 1 ? "" : "s"}`, r.ms);
-  return r.outcomes;
+  return r.outcomes.map((outcome, i) => verifyOutcome(cases[i]!, outcome));
 }
 
 const isAbort = (o: Outcome) => o.kind === "panic" || o.kind === "revert";
@@ -283,6 +315,7 @@ export async function shrinkByReplay(target: Target, input: Words, maxRounds: nu
     const cands = shrinkCandidates(best, n);
     if (cands.length === 0) return done(true);
     const ok = await reproduces(cands.map(lift));
+    if (ok.length !== cands.length) throw new Error("incomplete shrink replay results");
     rounds++;
     replays += cands.length;
     let pick: Words | undefined;
@@ -407,8 +440,13 @@ export async function recoverAbort(ctx: Context, target: Target, base: bigint, r
     } else {
       throw new Stop("inconsistent", "the recovered input neither fails nor aborts on replay", ctx.backend);
     }
-    const s = await shrinkByReplay(target, g!.input, ctx.abortShrinkRounds ?? 8, async (ws) =>
-      (await run(ws.map((input) => ({ mode: "replay", input })), "shrink")).map(reproduces));
+    const s = await shrinkByReplay(target, g!.input, ctx.abortShrinkRounds ?? 8, async (ws) => {
+      const outcomes = await run(ws.map((input) => ({ mode: "replay", input })), "shrink");
+      return outcomes.map((o) => {
+        if (o.kind !== "replayed" && !isAbort(o)) throw Stop.of(o, ctx.backend, "Replayed or an abort");
+        return reproduces(o);
+      });
+    });
     return {
       status: "aborted", target, iteration, original: g!.input, input: s.input, abort, shrinkAborted,
       shrinkRounds: s.rounds, shrinkReplays: s.replays, shrinkComplete: s.complete, feRuns: meter.feRuns,
@@ -515,7 +553,7 @@ async function localiseDivergence(ctx: Context, target: Target, base: bigint, ra
     const es = r.s[0]!, en = r.n[0]!;
     if (es.kind !== "evaluated") throw Stop.of(es, "sonatina", "Evaluated");
     if (en.kind !== "evaluated") throw Stop.of(en, "native", "Evaluated");
-    if (es.arity !== target.args.length || en.arity !== es.arity || es.input.some((word, i) => word !== en.input[i])) {
+    if (es.input.some((word, i) => word !== en.input[i])) {
       return { status: "infra", target, backend: "both", reason: "unlocated", detail: `backends evaluated different inputs at input ${iteration + 1n}`, feRuns: meter.feRuns };
     }
     if (es.output === en.output) {

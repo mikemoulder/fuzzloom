@@ -128,8 +128,8 @@ fn track_extremes(_ b: Bounds, _ arity: u64, _ x: Input, _ stats: mut Stats) {
     stats.draws += 1
 }
 
-/// Draw every argument independently with the unbiased inclusive Range
-/// sampler. No edge substitution or correlation advances this stream.
+/// Draw each argument with the inclusive rejection sampler. The mode
+/// applies neither edge substitutions nor cross-argument relations.
 pub fn draw_uniform(_ b: Bounds, arity: u64, _ rng: mut Rng, _ stats: mut Stats) -> Input {
     var x = Input::zero()
     var i: u64 = 0

@@ -11,11 +11,12 @@
 // from its known fields before it is written back: no key from a record file
 // ever reaches the disk unchecked.
 
-import { existsSync, mkdirSync, readFileSync, readdirSync, writeFileSync } from "node:fs";
-import { describe } from "./abi.ts";
+import { existsSync, mkdirSync, mkdtempSync, readFileSync, readdirSync, renameSync, rmdirSync, rmSync, writeFileSync } from "node:fs";
+import { join } from "node:path";
+import { describe, valueToWord, wordToValue } from "./abi.ts";
 import { fnv1a64 } from "./harness.ts";
 import { safeDir } from "./paths.ts";
-import { FE_TYPES, type Backend, type Target, type Words } from "./types.ts";
+import { FE_TYPES, type Backend, type FeType, type Target, type Words } from "./types.ts";
 
 export const RECORD_VERSION = 1;
 
@@ -83,10 +84,22 @@ export function validateRecord(raw: unknown, expectId?: string): FailureRecord {
   const args = (r.args as unknown[]).map((a) => {
     const x = a as Record<string, unknown>;
     if (!x || typeof x.name !== "string" || !NAME.test(x.name) || !FE_TYPES.includes(x.type as never)) bad("invalid argument");
-    return { name: x.name as string, type: x.type as string };
+    return { name: x.name as string, type: x.type as FeType };
   });
   const words = (v: unknown, what: string): string[] => {
-    if (!Array.isArray(v) || v.length !== args.length || !v.every((h) => typeof h === "string" && HEX.test(h))) bad(`${what} must be one lowercase hex word per argument`);
+    if (!Array.isArray(v) || v.length !== args.length || !v.every((h) => typeof h === "string" && h.length <= 66 && HEX.test(h))) {
+      bad(`${what} must be one lowercase hex word per argument`);
+    }
+    for (const [i, h] of (v as string[]).entries()) {
+      const word = BigInt(h);
+      const type = args[i]!.type;
+      try {
+        if (valueToWord(wordToValue(word, type), type) === word) continue;
+      } catch {
+        // The decoded value does not fit its recorded argument type.
+      }
+      bad(`${what} word ${i + 1} does not fit ${type}`);
+    }
     return v as string[];
   };
   const input = words(r.input, "input");
@@ -171,7 +184,16 @@ export function saveRecord(userRoot: string, r: FailureRecord): string {
       // an unreadable previous record is replaced, not trusted
     }
   }
-  writeFileSync(path, JSON.stringify(out, null, 2) + "\n");
+  // Publish one complete record even when another CLI invocation is reading.
+  const tempDir = mkdtempSync(join(dir, ".record-"));
+  const temp = join(tempDir, "record.json");
+  try {
+    writeFileSync(temp, JSON.stringify(out, null, 2) + "\n", { flag: "wx" });
+    renameSync(temp, path);
+  } finally {
+    rmSync(temp, { force: true });
+    rmdirSync(tempDir);
+  }
   return path;
 }
 

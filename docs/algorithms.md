@@ -21,13 +21,13 @@ Every non-trivial algorithm in Fuzzloom states what it guarantees and where it s
 
 **Per-property seeds.** `derive_seed(base, id) = splitmix64(base ^ splitmix64(id))`, where the CLI passes the 64-bit FNV-1a hash of the property name as `id`. Without this, every property in a run would draw the same stream and share its blind spots. A mutation campaign derives its seed from the property name together with the saved input.
 
-**Uniform ranges.** `below_or_eq(max)` draws uniformly from `0..=max` by masked rejection sampling. It draws a value of `bit_len(max)` bits and accepts it when it is at most `max`, otherwise draws again. Each draw succeeds with probability above 1/2, so the expected number of draws is below 2. A full-width maximum such as `2^256 - 1` takes the mask path and never rejects. Maxima below 2^64 use one 64-bit draw per attempt.
+**Uniform ranges.** `below_or_eq(max)` uses masked rejection sampling. It accepts a `bit_len(max)`-bit candidate when it is at most `max`. With independent, uniform bits this avoids modulo bias and needs fewer than two draws in expectation. Fuzzloom uses a deterministic 64-bit-state PRNG. At a given iteration it can produce at most `2^64` different 256-bit outputs across all seeds. The CLI's uniform mode disables edge substitutions, argument correlation and corpus mutation while keeping that PRNG. Maxima below 2^64 use one 64-bit word per attempt. A full-width maximum such as `2^256 - 1` accepts the assembled word in one attempt.
 
 | Guarantee | Test |
 |---|---|
 | Same seed, same stream; different seeds diverge; a zero seed is not stuck | `same_seed_same_stream`, `different_seeds_diverge`, `zero_seed_is_not_stuck` |
 | The stream matches a recorded reference | `known_answer_vector`, `splitmix64_matches_reference_vectors` |
-| No modulo bias. A range of about 2/3 of 2^256 is sampled uniformly, where reduction modulo `max + 1` would favour the lower third | `below_or_eq_is_unbiased_for_non_power_of_two_ranges` |
+| In the measured seed, the test detects the skew that reduction modulo `max + 1` would introduce on a range covering about 2/3 of the 256-bit domain | `below_or_eq_is_unbiased_for_non_power_of_two_ranges` |
 | Results never exceed `max`, including full-width maxima | `below_or_eq_respects_bound`, `below_or_eq_handles_full_width_maxima`, `full_width_maxima_use_the_exact_mask_path` |
 | Derived seeds differ per property and per base seed | `derived_seeds_differ_per_property_and_base` |
 

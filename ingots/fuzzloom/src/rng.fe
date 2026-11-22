@@ -34,9 +34,11 @@ impl Rng {
         (a << 192) | (b << 128) | (c << 64) | d
     }
 
-    /// Uniform value in `0..=max`, by masked rejection sampling: draw from
-    /// the smallest power-of-two range covering `max` and retry above it.
-    /// Unbiased for every `max`, at fewer than two draws on average. When
+    /// Value in `0..=max` by masked rejection sampling: draw from the
+    /// smallest power-of-two range covering `max` and retry above it.
+    /// With ideal random bits this removes modulo bias and needs fewer
+    /// than two attempts on average. The seeded stream has 64 bits of
+    /// state, including for wide words assembled from multiple draws. When
     /// `max` is already 2^k - 1 (every full-width type) the draw is masked
     /// once with no rejection. Maxima below 2^64 use one 64-bit draw.
     pub fn below_or_eq(mut self, _ max: u256) -> u256 {
@@ -118,7 +120,7 @@ pub fn splitmix64(_ x: u64) -> u64 {
     z ^ (z >> 31)
 }
 
-/// Derives an independent campaign seed for one property from a base seed
+/// Derives a separate campaign seed for one property from a base seed
 /// and a property id (the CLI uses the FNV-1a hash of the property name).
 /// Without this, every property in a run would see the same input stream,
 /// so a blind spot in that stream would be shared by all of them.
