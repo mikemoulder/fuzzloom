@@ -44,16 +44,16 @@ export function fnv1a64(text: string): bigint {
  * mutant_at, mutated_at), with its own seed.
  */
 export type HarnessCall =
-  | { mode: "check"; base: bigint; runs: bigint; corpus?: Words }
+  | { mode: "check"; base: bigint; runs: bigint; corpus?: Words; uniform?: boolean; measure?: boolean }
   | { mode: "replay"; input: Words }
-  | { mode: "input_at"; base: bigint; iteration: bigint; corpus?: Words }
+  | { mode: "input_at"; base: bigint; iteration: bigint; corpus?: Words; uniform?: boolean }
   | { mode: "digest"; base: bigint; runs: bigint }
   /** Prefix digests after first, first + step, ... (count of them) runs, from one pass. */
   | { mode: "checkpoints"; base: bigint; first: bigint; step: bigint; count: number; key?: bigint }
   | { mode: "target_input_at"; base: bigint; iteration: bigint }
   | { mode: "evaluate"; input: Words }
   /** replay on the input the campaign draws at `iteration`, in one case. */
-  | { mode: "replay_at"; base: bigint; iteration: bigint; corpus?: Words }
+  | { mode: "replay_at"; base: bigint; iteration: bigint; corpus?: Words; uniform?: boolean }
   /** evaluate on the input the digest draws at `iteration`, in one case. */
   | { mode: "evaluate_at"; base: bigint; iteration: bigint };
 
@@ -121,6 +121,10 @@ export function harnessBody(t: Target, call: HarnessCall): string {
         return bounded ? `check_mutating_within(${wrapped}, bounds: ${B}, ${tail})` : `check_mutating(${wrapped}, ${tail})`;
       }
       const tail = `seed: ${seedExpr(t, call.base)}, runs: ${call.runs}`;
+      if (call.uniform || call.measure) {
+        const budget = call.measure ? "0" : "SHRINK_BUDGET";
+        return `check_sampled(${wrapped}, bounds: ${B}, ${tail}, budget: ${budget}, uniform: ${Boolean(call.uniform)})`;
+      }
       return bounded ? `check_bounded(${wrapped}, bounds: ${B}, ${tail})` : `check(${wrapped}, ${tail})`;
     }
     case "replay": return `replay(${wrapped}, input: ${inputExpr(t, call.input)})`;
@@ -129,6 +133,7 @@ export function harnessBody(t: Target, call: HarnessCall): string {
         const tail = `corpus: ${inputExpr(t, call.corpus)}, seed: ${seedExpr(t, call.base, call.corpus)}, iteration: ${call.iteration}`;
         return bounded ? `mutant_at_within(${wrapped}, bounds: ${B}, ${tail})` : `mutant_at(${wrapped}, ${tail})`;
       }
+      if (call.uniform) return `sampled_input_at(${wrapped}, bounds: ${B}, seed: ${seedExpr(t, call.base)}, iteration: ${call.iteration}, uniform: true)`;
       return `input_at(${wrapped}, bounds: ${B}, seed: ${seedExpr(t, call.base)}, iteration: ${call.iteration})`;
     }
     case "digest":
@@ -147,7 +152,9 @@ export function harnessBody(t: Target, call: HarnessCall): string {
     case "replay_at": {
       const gen = call.corpus
         ? `mutated_at(${B}, arity: arity_of(${wrapped}), corpus: ${inputExpr(t, call.corpus)}, seed: ${seedExpr(t, call.base, call.corpus)}, iteration: ${call.iteration})`
-        : `generated_at(${B}, arity: arity_of(${wrapped}), seed: ${seedExpr(t, call.base)}, iteration: ${call.iteration})`;
+        : call.uniform
+          ? `sampled_at(${B}, arity: arity_of(${wrapped}), seed: ${seedExpr(t, call.base)}, iteration: ${call.iteration}, uniform: true)`
+          : `generated_at(${B}, arity: arity_of(${wrapped}), seed: ${seedExpr(t, call.base)}, iteration: ${call.iteration})`;
       return `replay(${wrapped}, input: ${gen})`;
     }
     case "evaluate_at": {

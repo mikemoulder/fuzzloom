@@ -110,7 +110,12 @@ pub fn draw_tracked(_ b: Bounds, arity: u64, _ rng: mut Rng, _ stats: mut Stats)
             }
         }
     }
-    i = 0
+    track_extremes(b, arity, x, mut stats)
+    x
+}
+
+fn track_extremes(_ b: Bounds, _ arity: u64, _ x: Input, _ stats: mut Stats) {
+    var i: u64 = 0
     while i < arity {
         if x.get(i) == b.lo.get(i) {
             stats.extremes = stats.extremes | (1 << (2 * i))
@@ -121,6 +126,19 @@ pub fn draw_tracked(_ b: Bounds, arity: u64, _ rng: mut Rng, _ stats: mut Stats)
         i += 1
     }
     stats.draws += 1
+}
+
+/// Draw every argument independently with the unbiased inclusive Range
+/// sampler. No edge substitution or correlation advances this stream.
+pub fn draw_uniform(_ b: Bounds, arity: u64, _ rng: mut Rng, _ stats: mut Stats) -> Input {
+    var x = Input::zero()
+    var i: u64 = 0
+    while i < arity {
+        let range = Range::between(lo: b.lo.get(i), hi: b.hi.get(i))
+        x = x.with(i, range.gen(mut rng))
+        i += 1
+    }
+    track_extremes(b, arity, x, mut stats)
     x
 }
 
@@ -132,14 +150,51 @@ pub fn draw(_ b: Bounds, arity: u64, _ rng: mut Rng) -> Input {
 
 /// The input a campaign with these parameters draws at `iteration`.
 pub fn generated_at(_ b: Bounds, arity: u64, seed: u64, iteration: u64) -> Input {
+    sampled_at(b, arity, seed, iteration, uniform: false)
+}
+
+pub fn sampled_at(_ b: Bounds, arity: u64, seed: u64, iteration: u64, uniform: bool) -> Input {
     var rng = Rng::new(seed)
+    var stats = Stats::new()
     var x = Input::zero()
     var i: u64 = 0
     while i <= iteration {
-        x = draw(b, arity, mut rng)
+        x = if uniform {
+            draw_uniform(b, arity, mut rng, mut stats)
+        } else {
+            draw(b, arity, mut rng)
+        }
         i += 1
     }
     x
+}
+
+#[test]
+fn uniform_draw_consumes_only_the_independent_range_draws() {
+    let b = Bounds::full(255, 65535, 0).restrict(0, lo: 11, hi: 19)
+    let first = Range::between(lo: 11, hi: 19)
+    let second = Range::between(lo: 0, hi: 65535)
+    var sampler = Rng::new(17)
+    var reference = Rng::new(17)
+    var stats = Stats::new()
+    var i: u64 = 0
+    while i < 128 {
+        let x = draw_uniform(b, arity: 2, mut sampler, mut stats)
+        assert!(
+            x.same(
+                Input::two(first.gen(mut reference), second.gen(mut reference)),
+            ),
+        )
+        assert!(
+            x.same(
+                sampled_at(b, arity: 2, seed: 17, iteration: i, uniform: true),
+            ),
+        )
+        i += 1
+    }
+    assert!(
+        stats.draws == 128 && stats.edge_args == 0 && stats.correlated == 0,
+    )
 }
 
 #[test]

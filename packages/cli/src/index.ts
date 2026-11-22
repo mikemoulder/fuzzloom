@@ -34,13 +34,14 @@ Options:
   --backend <b>     sonatina (EVM, default) or native
   --only <name>     run only targets (or, for replay, saved failures) whose name contains this text
   --no-corpus       fuzz: skip the mutation campaigns seeded from saved failures
+  --uniform         fuzz: draw independent uniform arguments without corpus mutation
   --json            machine-readable output
   --junit <file>    fuzz, diff, replay: also write a JUnit XML report
   -h, --help
 
 Exit codes: 0 all passed, 1 a property failed or aborted, 2 infrastructure error.`;
 
-type Opts = { seed?: string; "digest-key"?: string; runs?: string; backend: string; only?: string; json: boolean; "no-corpus": boolean; junit?: string };
+type Opts = { seed?: string; "digest-key"?: string; runs?: string; backend: string; only?: string; json: boolean; "no-corpus": boolean; uniform: boolean; junit?: string };
 
 /** Most saved failures seeding mutation campaigns, per property (most recently updated first). */
 const SEEDS_PER_TARGET = 8;
@@ -57,6 +58,7 @@ async function main(argv: string[]): Promise<number> {
       only: { type: "string" },
       json: { type: "boolean", default: false },
       "no-corpus": { type: "boolean", default: false },
+      uniform: { type: "boolean", default: false },
       junit: { type: "string" },
       help: { type: "boolean", short: "h", default: false },
     },
@@ -69,6 +71,7 @@ async function main(argv: string[]): Promise<number> {
   const opts = v as Opts;
   if (opts.backend !== "sonatina" && opts.backend !== "native") throw new Error(`unknown backend ${opts.backend}`);
   if (opts["digest-key"] !== undefined && command !== "diff") throw new Error("--digest-key requires diff");
+  if (opts.uniform && command !== "fuzz") throw new Error("--uniform requires fuzz");
   const pathArg = (i: number) => resolve(positionals[i] ?? ".");
   switch (command) {
     case "doctor": return doctor(positionals[1] ? pathArg(1) : undefined, opts);
@@ -152,13 +155,14 @@ async function fuzz(root: string, opts: Opts): Promise<number> {
   const targets = d.targets.filter((t) => t.kind === "property" && (!opts.only || t.name.includes(opts.only)));
   const ctx: Context = {
     userRoot: root, ingot: d.ingot, backend, fe,
-    onRun: progress(opts),
+    onRun: progress(opts), uniform: opts.uniform,
   };
-  const seeds = opts["no-corpus"] ? new Map<string, Seed[]>() : seedsFrom(root, d, targets);
+  const seeds = opts["no-corpus"] || opts.uniform ? new Map<string, Seed[]>() : seedsFrom(root, d, targets);
   const seeded = [...seeds.values()].reduce((a, s) => a + s.length, 0);
   if (!opts.json) {
     const corpus = seeded ? `, ${seeded} mutation campaign${seeded === 1 ? "" : "s"} from saved failures` : "";
-    console.log(`${bold("fuzzloom fuzz")} ${d.ingot}  ${dim(`seed ${base}, ${runs} runs, ${backend}, ${version}${corpus}`)}`);
+    const sampler = opts.uniform ? ", uniform sampling" : "";
+    console.log(`${bold("fuzzloom fuzz")} ${d.ingot}  ${dim(`seed ${base}, ${runs} runs, ${backend}, ${version}${sampler}${corpus}`)}`);
     for (const s of d.skipped) console.log(`${yellow("SKIP")}  ${s.name}  ${dim(`${s.file}:${s.line}`)}  ${s.reason}`);
   }
   const started = Date.now();
@@ -171,6 +175,7 @@ async function fuzz(root: string, opts: Opts): Promise<number> {
         kind: r.status === "failed" ? "property" : "abort",
         target: t, input: r.input, original: r.original,
         iteration: r.iteration, base, runs, backend, feVersion: version,
+        ...(opts.uniform ? { sampling: "uniform" } : {}),
         ...(r.status === "aborted" ? { detail: r.abort } : {}),
         ...(r.seededBy ? { seededBy: r.seededBy } : {}),
       });
@@ -183,14 +188,15 @@ async function fuzz(root: string, opts: Opts): Promise<number> {
   const failed = results.filter((x) => x.result.status === "failed" || x.result.status === "aborted").length;
   const infra = results.filter((x) => x.result.status === "infra").length;
   const passed = results.length - failed - infra;
-  writeJUnit(opts, `fuzzloom fuzz ${d.ingot}`, started, { command: "fuzz", seed: String(base), runs: String(runs), backend, fe_version: version },
+  const sampling = opts.uniform ? "uniform" : "biased";
+  writeJUnit(opts, `fuzzloom fuzz ${d.ingot}`, started, { command: "fuzz", seed: String(base), runs: String(runs), backend, sampling, fe_version: version },
     results.map(({ result: r, record }) => junitCase(`${d.ingot}.fuzz`, r.target, formatResult(r, record),
       r.status === "passed" ? "pass" : r.status === "infra" ? "error" : "failure",
       r.status === "failed" ? "counterexample" : r.status === "aborted" ? "abort" : r.status === "infra" ? r.reason : undefined)));
   if (opts.json) {
-    console.log(JSON.stringify(toJson({ ingot: d.ingot, seed: base, runs, backend, fe_version: version, skipped: d.skipped, results }), null, 2));
+    console.log(JSON.stringify(toJson({ ingot: d.ingot, seed: base, runs, backend, sampling, fe_version: version, skipped: d.skipped, results }), null, 2));
   } else {
-    console.log(`\n${passed} passed, ${failed} failed, ${infra} infrastructure errors in ${seconds(started)}  ${dim(`(repeat with --seed ${base})`)}`);
+    console.log(`\n${passed} passed, ${failed} failed, ${infra} infrastructure errors in ${seconds(started)}  ${dim(`(repeat with --seed ${base}${opts.uniform ? " --uniform" : ""})`)}`);
   }
   return infra > 0 ? 2 : failed > 0 ? 1 : 0;
 }

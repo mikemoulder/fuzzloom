@@ -60,12 +60,13 @@ test("reproduce refuses an id that is a path", () => {
 
 test("saving keeps only known fields, and strips control characters from text", () => {
   const { root, failures } = ingot();
-  const r = { ...record(), detail: "overflow\u001b[2J\u001b]0;FIXED\u0007", scripts: { postinstall: "echo pwned" }, __proto__x: 1 };
+  const r = { ...record(), sampling: "uniform" as const, detail: "overflow\u001b[2J\u001b]0;FIXED\u0007", scripts: { postinstall: "echo pwned" }, __proto__x: 1 };
   saveRecord(root, r as FailureRecord);
   const saved = JSON.parse(readFileSync(join(failures, `${r.id}.json`), "utf8"));
   assert.equal(saved.scripts, undefined);
   assert.equal(saved.__proto__x, undefined);
   assert.equal(saved.detail, "overflow[2J]0;FIXED");
+  assert.equal(loadRecord(root, r.id).sampling, "uniform");
   assert.deepEqual(listRecords(root).map((x) => x.id), [r.id]);
 });
 

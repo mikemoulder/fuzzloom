@@ -22,6 +22,8 @@ export type Context = {
   abortShrinkRounds?: number;
   /** Most cases in one abort-search round (default 64). Divergence search uses checkpoints instead. */
   maxWidth?: number;
+  /** Independent uniform argument draws, with corpus campaigns disabled. */
+  uniform?: boolean;
 };
 
 export type Stats = { edgeArgs: bigint; correlated: bigint; extremes: bigint };
@@ -319,9 +321,9 @@ export async function runProperties(ctx: Context, targets: Target[], base: bigin
   const cases: Case[] = [];
   const owner: { t: number; seed?: Seed }[] = [];
   for (const [t, target] of targets.entries()) {
-    cases.push({ target, call: { mode: "check", base, runs } });
+    cases.push({ target, call: { mode: "check", base, runs, uniform: ctx.uniform } });
     owner.push({ t });
-    for (const seed of seeds.get(target.name) ?? []) {
+    for (const seed of ctx.uniform ? [] : (seeds.get(target.name) ?? [])) {
       cases.push({ target, call: { mode: "check", base, runs, corpus: seed.input } });
       owner.push({ t, seed });
     }
@@ -375,7 +377,7 @@ export async function runProperties(ctx: Context, targets: Target[], base: bigin
  * Cost: 1 + roundsFor(runs - 1, width) + 1 + shrink rounds fe runs.
  */
 export async function recoverAbort(ctx: Context, target: Target, base: bigint, runs: bigint, first: Outcome, corpus?: Words): Promise<PropertyResult> {
-  const c = corpus ? { corpus } : {};
+  const c = corpus ? { corpus } : { uniform: ctx.uniform };
   const meter: Meter = { feRuns: 1 };
   const run = (calls: HarnessCall[], label: string) => runCases(ctx, calls.map((call) => ({ target, call })), `${target.name}-${label}`, ctx.backend, meter);
   try {

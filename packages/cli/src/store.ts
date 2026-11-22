@@ -50,6 +50,7 @@ export type FailureRecord = {
   iteration: string;
   base_seed: string;
   runs: string;
+  sampling?: "uniform";
   backend: Backend | "both";
   detail?: string;
   /** The saved failure whose mutation campaign found this one. */
@@ -104,6 +105,7 @@ export function validateRecord(raw: unknown, expectId?: string): FailureRecord {
     iteration: text(r.iteration ?? "", 80),
     base_seed: text(r.base_seed ?? "", 80),
     runs: text(r.runs ?? "", 80),
+    ...(r.sampling === "uniform" ? { sampling: "uniform" as const } : {}),
     backend: r.backend as FailureRecord["backend"],
     ...(r.detail !== undefined ? { detail: text(r.detail, 500) } : {}),
     ...(r.seeded_by !== undefined ? (typeof r.seeded_by === "string" && ID.test(r.seeded_by) ? { seeded_by: r.seeded_by } : bad("invalid seeded_by")) : {}),
@@ -124,6 +126,7 @@ export function recordId(target: string, input: Words, arity: number): string {
 export function makeRecord(o: {
   kind: FailureRecord["kind"]; target: Target; input: Words; original?: Words; iteration: bigint;
   base: bigint; runs: bigint; backend: FailureRecord["backend"]; detail?: string; seededBy?: string; feVersion: string;
+  sampling?: FailureRecord["sampling"];
 }): FailureRecord {
   const n = o.target.args.length;
   const now = new Date().toISOString();
@@ -139,6 +142,7 @@ export function makeRecord(o: {
     iteration: o.iteration.toString(),
     base_seed: o.base.toString(),
     runs: o.runs.toString(),
+    ...(o.sampling ? { sampling: o.sampling } : {}),
     backend: o.backend,
     ...(o.detail ? { detail: o.detail } : {}),
     ...(o.seededBy ? { seeded_by: o.seededBy } : {}),
