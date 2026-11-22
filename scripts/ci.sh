@@ -102,7 +102,7 @@ grep -q "reserve_out = 10312385981465" reports/amm-swap-fuzz.txt
 step "Published npm release: fuzz on both backends and diff"
 # Pin the registry smoke test to a release that exists independently of the
 # checkout version, which may be in CI before it is published.
-npm install -g --silent --ignore-scripts --prefix "$pkg_tmp/published" fuzzloom@0.1.1
+npm install -g --silent --ignore-scripts --prefix "$pkg_tmp/published" fuzzloom@0.1.2
 published_bin="$pkg_tmp/published/bin/fuzzloom"
 published_project="$pkg_tmp/published-project"
 mkdir -p "$published_project"
