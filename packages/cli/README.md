@@ -11,6 +11,8 @@ npx fuzzloom diff            # compare every diff_* target on sonatina and nativ
 npx fuzzloom replay          # re-run saved failures as regression checks
 ```
 
+`fuzz --uniform` uses rejection sampling within the declared bounds and disables edge bias, argument correlation and corpus mutation. A differential run reports its checkpoint key. Pass the same `--seed` and `--digest-key` to repeat its comparisons. A reported mismatch includes both outputs for the same input.
+
 ## Writing properties
 
 ```fe
