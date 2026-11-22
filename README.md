@@ -249,7 +249,7 @@ The [guide](docs/guide.md) covers each of these in detail, with the failure mess
 | `fuzzloom list [path]` | Lists every target with its signature, effects, fixtures and declared ranges, and every skipped function with the reason |
 | `fuzzloom fuzz [path]` | Runs every property campaign, plus one mutation campaign per saved failure, then recovers and shrinks any abort |
 | `fuzzloom diff [path]` | Compares keyed checkpoints on sonatina and native and verifies the located mismatch |
-| `fuzzloom sequence [path]` | From source, generates and shrinks traces of `seq_*` invariant checks, then saves failing traces for replay |
+| `fuzzloom sequence [path]` | Since 0.1.3, generates and shrinks traces of `seq_*` invariant checks and saves failing traces for replay |
 | `fuzzloom reproduce <id> [path]` | Replays one saved failure from its stored input, with no random generation involved |
 | `fuzzloom replay [path]` | Replays every saved failure: `FIXED` when it now passes, `FAILS` when it still fails, `REGRESSED` when a fixed failure is back |
 
@@ -258,10 +258,10 @@ The [guide](docs/guide.md) covers each of these in detail, with the failure mess
 | `--seed <n>` | Base seed. The CLI prints the seed so the input stream can be repeated |
 | `--digest-key <n>` | Reuse the recorded checkpoint key for `diff`. The default is sampled independently of the campaign seed |
 | `--runs <n>` | Positive 64-bit budget per property (10,000 by default), differential target (100,000) or sequence target (1,000) |
-| `--steps <n>` | From source, limit each sequence to 1–8 actions (default 8) |
+| `--steps <n>` | Limit each sequence to 1–8 actions (default 8) |
 | `--backend <b>` | `sonatina` (EVM, default) or `native` |
 | `--only <text>` | Select targets or saved failures whose name contains the text. An empty selection exits 2 |
-| `--strict` | From source, exit 2 before running if a selected `prop_*`, `diff_*`, or `seq_*` candidate was skipped |
+| `--strict` | Since 0.1.3, exit 2 before running if a selected `prop_*`, `diff_*`, or `seq_*` candidate was skipped |
 | `--no-corpus` | `fuzz` without the mutation campaigns around saved failures |
 | `--uniform` | In 0.1.2, `fuzz` with rejection sampling inside the declared ranges. Disables edge bias, argument correlation and corpus mutation |
 | `--json` | Machine-readable output |

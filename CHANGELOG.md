@@ -2,7 +2,7 @@
 
 All notable changes to Fuzzloom. The project follows [semantic versioning](https://semver.org); while the version is 0.x, minor versions may change behaviour.
 
-## Unreleased
+## 0.1.3
 
 - Every public `prop_*`, `diff_*`, and `seq_*` candidate is listed with its eligibility. `--strict` fails a CI campaign when a selected candidate is skipped.
 - `sequence` generates, shrinks, stores, and replays bounded stateful traces through Fe effects. Shrinking can lower repeated arguments together.

@@ -134,7 +134,7 @@ impl Clock for FixedClock { fn now(self) -> u64 { self.at } }
 pub fn fixture_clock() -> FixedClock { FixedClock { at: 1700000000 } }
 ```
 
-**Fresh state every time.** Every evaluation builds every effect from its fixture again. Evaluations never see each other's changes, so a failure replays exactly, and shrinking compares like with like. A bug that only appears after a particular sequence of calls is therefore out of reach for now; see [what Fuzzloom does not do](../README.md#what-fuzzloom-does-not-do).
+**Fresh state every time.** A `prop_*` evaluation builds every effect from its fixture again. Evaluations never see each other's changes, so failure replay and shrink trials start from the same state. To check behavior across several calls that share a fixture, use [stateful sequences](#stateful-sequences).
 
 **When a target is skipped.** A target whose effect has no fixture, or several, is skipped with the reason:
 
@@ -152,7 +152,7 @@ pub fn fixture_clock() -> FixedClock { FixedClock { at: 1700000000 } }
 
 ### Stateful sequences
 
-From the checkout, name a step `pub fn seq_<name>(...) -> bool` and supply its usual `fixture_*()` functions. Arguments and range annotations follow the same rules as properties. The step performs one operation and returns the invariant result after that operation. All steps in a trace share the same effects. A new trace or shrink attempt starts with fresh fixtures.
+Starting in CLI version 0.1.3, name a step `pub fn seq_<name>(...) -> bool` and supply its usual `fixture_*()` functions. Arguments and range annotations follow the same rules as properties. The step performs one operation and returns the invariant result after that operation. All steps in a trace share the same effects. A new trace or shrink attempt starts with fresh fixtures.
 
 ```bash
 node packages/cli/src/index.ts sequence examples/receipt-ledger --strict --seed 7 --runs 32
@@ -262,7 +262,7 @@ FAIL  prop_x(u256)  counterexample at mutant 37 of saved failure prop_x-1a2b3c4d
 
 Exit codes make Fuzzloom a normal CI step: `1` fails the build on a finding, and `2` fails it on an infrastructure problem. Pin a seed for a deterministic check, or leave it random to explore further on every run. The seed is printed either way. `--junit` writes a report that test dashboards understand. Findings become `<failure>` and infrastructure problems become `<error>`, so a dashboard never shows out-of-gas as a broken property.
 
-From the checkout, add `--strict` to `fuzz`, `diff`, or `sequence` to turn skipped candidates in the selected command and `--only` scope into JUnit errors and exit 2 before any campaigns run. Campaign JSON includes selected, runnable, skipped, run and completed target counts. For fuzz and sequence, the input count stops at each reported first finding or the end of the successful campaign. For diff, it counts the input pairs in completed campaigns. It excludes auxiliary search rounds, mutation trials outside the reported outcome, and infrastructure outcomes.
+Starting in CLI version 0.1.3, add `--strict` to `fuzz`, `diff`, or `sequence` to turn skipped candidates in the selected command and `--only` scope into JUnit errors and exit 2 before any campaigns run. Campaign JSON includes selected, runnable, skipped, run and completed target counts. For fuzz and sequence, the input count stops at each reported first finding or the end of the successful campaign. For diff, it counts the input pairs in completed campaigns. It excludes auxiliary search rounds, mutation trials outside the reported outcome, and infrastructure outcomes.
 
 GitHub Actions, on Linux so the native backend is available:
 

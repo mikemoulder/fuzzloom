@@ -8,6 +8,7 @@ Write properties as ordinary Fe functions. Fuzzloom generates inputs with a dete
 npx fuzzloom doctor          # check fe, the native backend and your project
 npx fuzzloom fuzz            # run every prop_* property in the current ingot
 npx fuzzloom diff            # compare every diff_* target on sonatina and native
+npx fuzzloom sequence --strict  # generate and shrink seq_* action traces
 npx fuzzloom replay          # re-run saved failures as regression checks
 ```
 
@@ -32,7 +33,11 @@ pub fn fixture_policy() -> FeePolicy { FeePolicy { bps: 25, min_fee: 5 } }
 - Arguments: 1 to 3 of `u8` to `u256`, `i8` to `i256`, or `bool`.
 - Effects (`uses`) are provided by a `pub fn fixture_*()` per effect type, fresh for every evaluation.
 - `/// fuzzloom: <arg> in <lo>..=<hi>` restricts an argument's range.
-- `list` reports skipped targets with reasons. The source checkout adds strict discovery for unsupported signatures and can refuse to run if any selected target is skipped. See the [CI guide](https://github.com/MikeMoulder/fuzzloom/blob/main/docs/guide.md#9-running-in-ci).
+- `list` reports skipped targets with reasons. Add `--strict` to `fuzz`, `diff` or `sequence` to exit 2 before running if a selected target is skipped. `--json` reports the campaign counts, and `--junit` records each selected skip as an error. See the [CI guide](https://github.com/MikeMoulder/fuzzloom/blob/main/docs/guide.md#9-running-in-ci).
+
+## Stateful checks
+
+Write a `pub fn seq_<name>(...) -> bool` that performs one action and checks the invariant afterward. A trace shares its Fe effect fixtures across actions. Each new trace or shrink attempt starts with fresh fixtures. `sequence --steps 8` generates traces of up to eight actions and saves the shrunk trace for `reproduce` and `replay`. A panic during the trace is reported as infrastructure. [Receipt example](https://github.com/MikeMoulder/fuzzloom/tree/main/examples/receipt-ledger)
 
 ## Requirements
 
