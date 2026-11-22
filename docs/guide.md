@@ -14,6 +14,7 @@ From a first property to a regression suite in CI. For how Fuzzloom works inside
 10. [Configuration](#10-configuration)
 11. [Troubleshooting](#11-troubleshooting)
 12. [Writing good properties](#12-writing-good-properties)
+13. [Stateful sequences](#13-stateful-sequences)
 
 ## 1. Install and check
 
@@ -134,7 +135,7 @@ impl Clock for FixedClock { fn now(self) -> u64 { self.at } }
 pub fn fixture_clock() -> FixedClock { FixedClock { at: 1700000000 } }
 ```
 
-**Fresh state every time.** A `prop_*` evaluation builds every effect from its fixture again. Evaluations never see each other's changes, so failure replay and shrink trials start from the same state. To check behavior across several calls that share a fixture, use [stateful sequences](#stateful-sequences).
+**Fresh state every time.** A `prop_*` evaluation builds every effect from its fixture again. Evaluations never see each other's changes, so failure replay and shrink trials start from the same state. To check behavior across several calls that share a fixture, use [stateful sequences](#13-stateful-sequences).
 
 **When a target is skipped.** A target whose effect has no fixture, or several, is skipped with the reason:
 
@@ -152,35 +153,7 @@ pub fn fixture_clock() -> FixedClock { FixedClock { at: 1700000000 } }
 
 ### Stateful sequences
 
-Starting in CLI version 0.1.3, name a step `pub fn seq_<name>(...) -> bool` and supply its usual `fixture_*()` functions. Arguments and range annotations follow the same rules as properties. The step performs one operation and returns the invariant result after that operation. All steps in a trace share the same effects. A new trace or shrink attempt starts with fresh fixtures.
-
-```bash
-node packages/cli/src/index.ts sequence examples/receipt-ledger --strict --seed 7 --runs 32
-node scripts/check-sequence-workflow.mjs
-```
-
-The first command shrinks a four-step receipt failure to two posts of receipt 0. With `--steps 1`, all 32 traces pass. The second command verifies on both backends that the saved trace fails at step 2, passes after the fix, and regresses when the bug is restored. `reproduce` and `replay` use the saved actions in order. A panic during a sequence is an infrastructure outcome.
-
-In an Fe test, `find_sequence` generates sequences of one to eight steps. Each step carries up to three bounded input words, so the first can select a command and the remaining words can provide its arguments. Provide an evaluator that creates a fresh fixture and calls `run_steps` inside its `with` block. The step function performs the operation and returns the invariant result after the operation.
-
-```fe
-fn evaluate_receipts(_ steps: Sequence) -> u64 {
-    var ledger = ReceiptLedger { seen: 0, balance: 0, model: 0 }
-    with (ReceiptLedger = ledger) { run_steps(steps, post_receipt) }
-}
-
-let result = find_sequence(
-    evaluate_receipts,
-    bounds: Bounds::full(3, 0, 0),
-    arity: 1,
-    max_steps: 8,
-    seed: 7,
-    runs: 20,
-    budget: 100,
-)
-```
-
-The Fe report contains the original sequence, the shrunk failure, and the 1-based failing step. Completed shrinking leaves no failing candidate among the tested contiguous power-of-two deletions or the floor and halfway moves on individual words and equal words in the same argument position. A panic from a step propagates through the test.
+Use [stateful sequences](#13-stateful-sequences) for invariants that depend on several calls sharing the same effect fixture.
 
 ## 6. Restricting input ranges
 
@@ -237,7 +210,7 @@ Targets may use effects and declared ranges exactly as properties do. `diff` nee
 
 ## 8. Saved failures as a regression suite
 
-Every `FAIL`, `ABORT` and `DIVERGE` is saved to `.fuzzloom/failures/<target>-<hash>.json`. The record holds the shrunk input, the original input, the seed, the iteration, the backend and the fe version, plus a human-readable value per argument. **Commit this directory.** It is a regression suite that grows on its own.
+Every `FAIL`, `ABORT` and `DIVERGE` is saved to `.fuzzloom/failures/<target>-<hash>.json`. Single-input records store the shrunk and original inputs where available. Stateful records store the ordered shrunk trace for the backend that found it. Records also include the seed, iteration, backend and Fe version. Commit this directory to keep the findings as regression tests.
 
 ```bash
 npx fuzzloom replay                 # re-check every saved failure
@@ -273,11 +246,13 @@ GitHub Actions, on Linux so the native backend is available:
   run: |
     curl -fsSL https://raw.githubusercontent.com/argotorg/fe/master/feup/feup.sh | bash -s -- --version v26.6.0
     echo "$HOME/.fe/bin" >> "$GITHUB_PATH"
-- run: npx -y fuzzloom doctor
-- run: npx -y fuzzloom replay --junit reports/replay.xml     # saved failures stay fixed
-- run: npx -y fuzzloom fuzz --junit reports/fuzz.xml          # new inputs every run
-- run: npx -y fuzzloom diff --junit reports/diff.xml          # sonatina against native
+- run: npx -y fuzzloom@0.1.3 doctor
+- run: npx -y fuzzloom@0.1.3 replay --junit reports/replay.xml
+- run: npx -y fuzzloom@0.1.3 fuzz --strict --junit reports/fuzz.xml
+- run: npx -y fuzzloom@0.1.3 diff --strict --junit reports/diff.xml
 ```
+
+If your ingot declares `seq_*` targets, add `npx -y fuzzloom@0.1.3 sequence --strict --seed 7 --junit reports/sequence.xml`. Add `--backend native` in a separate job to run the same trace stream on the native backend. An empty selection exits 2, so include only the campaign commands that have targets in your ingot.
 
 Fuzzloom's own pipeline, [`scripts/ci.sh`](../scripts/ci.sh), is a complete working example. It runs on CircleCI.
 
@@ -302,7 +277,7 @@ Everything is a command-line option or an environment variable. There is no conf
 
 **`Native backend: fe not runnable in WSL`.** Install fe inside your WSL distro (`feup` works there too), or point `FE_WSL_DISTRO` and `FE_WSL_BIN` at it. Only `diff` and `--backend native` need it.
 
-**A property you wrote is missing from `list`.** It is either not `pub`, not named `prop_`/`diff_`, or skipped. Skipped functions are listed with the reason.
+**A target you wrote is missing from `list`.** Check that it is public and starts with `prop_`, `diff_` or `seq_`. The skipped section shows unsupported signatures and fixtures with their reasons.
 
 **`fe fmt --check` complains about `.fuzzloom/tmp`.** Generated harnesses are removed at the end of every command, and kept only after an infrastructure error. Delete the directory, or fix the infrastructure error and rerun.
 
@@ -315,3 +290,64 @@ Everything is a command-line option or an environment variable. There is no conf
 - **Monotonicity.** Depositing more never yields fewer shares; a schedule that started later has vested no more.
 - **Guard preconditions by returning `true`.** If an input is outside the function's contract, `if amount > balance { return true }` keeps it from being reported. Prefer an [input range](#6-restricting-input-ranges) when the region is contiguous, so no runs are wasted.
 - **Let aborts be findings.** A property does not need to catch overflow. An abort is reported with its input recovered, which is usually exactly the bug.
+
+## 13. Stateful sequences
+
+Use `fuzzloom sequence` in CLI 0.1.3 to check an invariant across several operations on shared state. A public `seq_*` function performs one operation and returns `bool` after checking the invariant. Its one to three scalar arguments and effect fixtures follow the same rules as [properties with effects](#5-properties-with-effects). All steps in one trace share the fixtures. Every new trace, replay and shrink attempt builds them again.
+
+### Reproduce a receipt regression
+
+The [receipt-ledger example](../examples/receipt-ledger) has a planted duplicate-credit bug. From a Fuzzloom checkout on Fe 26.6.0, start with one action per trace:
+
+```bash
+npx -y fuzzloom@0.1.3 sequence examples/receipt-ledger \
+  --strict --seed 7 --runs 32 --steps 1
+```
+
+All 32 traces pass. Remove `--steps 1` to allow up to eight actions and exercise duplicate receipt posting:
+
+```bash
+npx -y fuzzloom@0.1.3 sequence examples/receipt-ledger \
+  --strict --seed 7 --runs 32
+```
+
+```text
+FAIL seq_credit_once, trace 2: 4 to 2 steps
+step 1: id = 0
+step 2: id = 0
+```
+
+The failing campaign exits 1 and saves the two receipt posts in order. Add `--backend native` to generate and save the same failing trace for native. Each backend has its own failure record. Run `replay` to check the records against the current code:
+
+```bash
+npx -y fuzzloom@0.1.3 replay examples/receipt-ledger --only seq_credit_once
+```
+
+To check the whole lifecycle in a temporary copy, run `node scripts/check-sequence-workflow.mjs` from the checkout. It verifies the failure on both backends, applies a guard against duplicate credit, checks `FIXED`, then restores the original code and checks `REGRESSED`.
+
+### Interpret the result
+
+The default maximum is eight actions. Set `--steps` to a value from 1 to 8 and `--runs` to control the trace budget per target. A failed invariant produces a replayable trace. A panic during a sequence is reported as infrastructure. Replay uses the recorded actions and backend, so it can check the counterexample after the seed or generator changes.
+
+### Use sequences inside a Fe test
+
+`find_sequence` generates bounded traces with up to three input words per step. A word can select an operation while the other words supply arguments. Provide an evaluator that creates a fresh fixture and calls `run_steps` under a `with` block.
+
+```fe
+fn evaluate_receipts(_ steps: Sequence) -> u64 {
+    var ledger = ReceiptLedger { seen: 0, balance: 0, model: 0 }
+    with (ReceiptLedger = ledger) { run_steps(steps, post_receipt) }
+}
+
+let result = find_sequence(
+    evaluate_receipts,
+    bounds: Bounds::full(3, 0, 0),
+    arity: 1,
+    max_steps: 8,
+    seed: 7,
+    runs: 20,
+    budget: 100,
+)
+```
+
+The Fe report contains the original sequence, the shrunk failing trace, and the 1-based failing step. Completed shrinking leaves no failing candidate among the tested contiguous power-of-two deletions or the floor and halfway moves on individual words and equal words in the same argument position. A panic from a step propagates through the Fe test.
