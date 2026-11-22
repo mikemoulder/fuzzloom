@@ -256,7 +256,7 @@ The [guide](docs/guide.md) covers each of these in detail, with the failure mess
 | `--backend <b>` | `sonatina` (EVM, default) or `native` |
 | `--only <text>` | Select targets or saved failures whose name contains the text. An empty selection exits 2 |
 | `--no-corpus` | `fuzz` without the mutation campaigns around saved failures |
-| `--uniform` | `fuzz` with rejection sampling inside the declared ranges. Available from source. Disables edge bias, argument correlation and corpus mutation |
+| `--uniform` | In 0.1.2, `fuzz` with rejection sampling inside the declared ranges. Disables edge bias, argument correlation and corpus mutation |
 | `--json` | Machine-readable output |
 | `--junit <file>` | Also write a JUnit XML report: findings are `<failure>`, infrastructure problems are `<error>` |
 

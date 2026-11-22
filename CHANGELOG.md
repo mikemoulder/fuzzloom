@@ -2,6 +2,14 @@
 
 All notable changes to Fuzzloom. The project follows [semantic versioning](https://semver.org); while the version is 0.x, minor versions may change behaviour.
 
+## 0.1.2 (2026-11-22)
+
+- Differential campaigns use independently keyed polynomial checkpoints. The CLI records the key for replay and verifies that the same input returns different outputs before saving a mismatch.
+- `fuzz --uniform` measures rejection sampling without edge bias, argument correlation or corpus mutation. The package bundles the Fe library's stateful sequence runner.
+- Campaigns reject empty selections and invalid input budgets. Replay validates result payloads and incomplete compiler runs stop shrinking with an infrastructure error.
+- Concurrent invocations use separate harness directories and replace saved records atomically.
+- The repository includes cross-backend integer measurements and a paired sampling benchmark. See [experiment results](docs/experiments.md).
+
 ## 0.1.1 (2026-11-18)
 
 A security release: upgrade if you run Fuzzloom on projects you do not control. `npx fuzzloom@latest` picks it up.
