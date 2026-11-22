@@ -1,0 +1,281 @@
+//! Stateful campaigns over bounded sequences of the existing Input words.
+//!
+//! An evaluator constructs a new fixture and invokes run_steps under its
+//! effects. Steps within one replay share that fixture. A reported failure
+//! is the first 1-based step at which the invariant returned false.
+
+use ingot::draw::draw
+use ingot::input::{Bounds, Input, MAX_ARITY}
+use ingot::rng::Rng
+use core::MemVec
+
+pub const MAX_STEPS: u64 = 8
+
+pub struct Sequence { steps: MemVec<Input>, len: u64 }
+
+impl Sequence {
+    pub fn empty() -> Self {
+        Sequence { steps: MemVec::new(), len: 0 }
+    }
+
+    pub fn len(self) -> u64 {
+        self.len
+    }
+
+    pub fn get(self, _ i: u64) -> Input {
+        let Option::Some(step) = self.steps.get(i.downcast_truncate()) else {
+            assert!(false)
+            return Input::zero()
+        }
+        step
+    }
+
+    pub fn push(mut self, _ step: Input) {
+        assert!(self.len < MAX_STEPS)
+        self.steps.push(step)
+        self.len += 1
+    }
+
+    fn prefix(self, _ len: u64) -> Self {
+        assert!(len <= self.len)
+        self.without(len, self.len - len)
+    }
+
+    #[inline(never)]
+    fn without(self, _ start: u64, _ count: u64) -> Self {
+        var out = Self::empty()
+        var i: u64 = 0
+        while i < self.len {
+            if i < start || i >= start + count {
+                out.push(self.get(i))
+            }
+            i += 1
+        }
+        out
+    }
+
+    #[inline(never)]
+    fn replaced(self, _ index: u64, _ input: Input) -> Self {
+        var out = Self::empty()
+        var i: u64 = 0
+        while i < self.len {
+            out.push(if i == index { input } else { self.get(i) })
+            i += 1
+        }
+        out
+    }
+}
+
+/// Run the step and its invariant together under the caller's effects.
+/// Return zero on success, otherwise the first failed step.
+#[inline(never)]
+pub fn run_steps<F: Fn(Input) -> bool>(_ s: Sequence, _ step: F) -> u64
+uses F::E
+{
+    var i: u64 = 0
+    while i < s.len {
+        if !step(s.get(i)) {
+            return i + 1
+        }
+        i += 1
+    }
+    0
+}
+
+/// Draw one nonempty sequence. Each step uses the existing boundary-biased
+/// argument generator. Consecutive draws from a seed form a stable stream.
+#[inline(never)]
+pub fn draw_sequence(_ bounds: Bounds, arity: u64, max_steps: u64, _ rng: mut Rng) -> Sequence {
+    assert!(
+        arity > 0 && arity <= MAX_ARITY && max_steps > 0 && max_steps <= MAX_STEPS,
+    )
+    let len = 1 + (rng.below_or_eq((max_steps - 1) as u256)).downcast_truncate()
+    var s = Sequence::empty()
+    while s.len < len {
+        s.push(draw(bounds, arity, mut rng))
+    }
+    s
+}
+
+pub struct SequenceReport {
+    pub failed: bool,
+    pub iteration: u64,
+    pub original: Sequence,
+    pub shrunk: Sequence,
+    pub failed_step: u64,
+    pub shrink_attempts: u64,
+    pub shrink_complete: bool,
+}
+
+/// Find the first failed sequence, then shrink its failing prefix. The
+/// evaluator must create a fresh fixture on every call and return the
+/// first failed step (or zero). A panic propagates from the evaluator.
+pub fn find_sequence<F: Fn(Sequence) -> u64>(
+    _ evaluate: F,
+    bounds: Bounds,
+    arity: u64,
+    max_steps: u64,
+    seed: u64,
+    runs: u64,
+    budget: u64,
+) -> SequenceReport
+uses F::E
+{
+    var rng = Rng::new(seed)
+    var iteration: u64 = 0
+    while iteration < runs {
+        let original = draw_sequence(bounds, arity, max_steps, mut rng)
+        let failed_step = evaluate(original)
+        if failed_step != 0 {
+            return minimise(
+                evaluate,
+                original,
+                failed_step,
+                bounds.lo,
+                arity,
+                budget,
+                iteration,
+            )
+        }
+        iteration += 1
+    }
+    SequenceReport {
+        failed: false,
+        iteration,
+        original: Sequence::empty(),
+        shrunk: Sequence::empty(),
+        failed_step: 0,
+        shrink_attempts: 0,
+        shrink_complete: true,
+    }
+}
+
+// Truncating beyond the first failure preserves a deterministic failure.
+// Completed shrinking establishes a local minimum under tested contiguous
+// power-of-two deletions and per-word moves to the floor or halfway there.
+// The budget counts replays. Every accepted move decreases length or a word.
+// Keep the replay and candidate loops separate in Sonatina's optimizer.
+#[inline(never)]
+fn minimise<F: Fn(Sequence) -> u64>(
+    _ evaluate: F,
+    _ original: own Sequence,
+    _ first: u64,
+    _ floor: Input,
+    _ arity: u64,
+    _ budget: u64,
+    _ iteration: u64,
+) -> SequenceReport
+uses F::E
+{
+    var best = original.prefix(first)
+    var attempts: u64 = 0
+    var complete = false
+    while !complete && attempts < budget {
+        var improved = false
+        var size = MAX_STEPS / 2
+        while size > 0 && !improved && attempts < budget {
+            var start: u64 = 0
+            while size < best.len && start + size <= best.len && !improved && attempts < budget {
+                let candidate = best.without(start, size)
+                attempts += 1
+                let failed_step = evaluate(candidate)
+                if failed_step > 0 {
+                    best = candidate.prefix(failed_step)
+                    improved = true
+                }
+                start += 1
+            }
+            size = size / 2
+        }
+        var i: u64 = 0
+        while i < best.len && !improved && attempts < budget {
+            let step = best.get(i)
+            var arg: u64 = 0
+            while arg < arity && !improved && attempts < budget {
+                let lower = floor.get(arg)
+                let distance = step.get(arg) - lower
+                var half = false
+                while distance > 0 && !improved && attempts < budget {
+                    let smaller = if half { lower + distance / 2 } else { lower }
+                    if !half || smaller > lower {
+                        let candidate = best.replaced(i, step.with(arg, smaller))
+                        attempts += 1
+                        let failed_step = evaluate(candidate)
+                        if failed_step > 0 {
+                            best = candidate.prefix(failed_step)
+                            improved = true
+                        }
+                    }
+                    if half { break }
+                    half = true
+                }
+                arg += 1
+            }
+            i += 1
+        }
+        complete = !improved && attempts < budget
+    }
+    let failed_step = best.len
+    SequenceReport {
+        failed: true,
+        iteration,
+        original,
+        shrunk: best,
+        failed_step,
+        shrink_attempts: attempts,
+        shrink_complete: complete,
+    }
+}
+
+struct ReceiptLedger { seen: u64, balance: u64, model: u64 }
+
+fn post_receipt(_ step: Input) -> bool uses (ledger: mut ReceiptLedger) {
+    let id: u64 = step.w0.downcast_truncate()
+    let bit: u64 = 1 << id
+    if ledger.seen & bit == 0 {
+        ledger.model += 1
+        ledger.seen = ledger.seen | bit
+    }
+    ledger.balance += 1
+    ledger.balance == ledger.model
+}
+
+fn evaluate_receipts(_ s: Sequence) -> u64 {
+    var ledger = ReceiptLedger { seen: 0, balance: 0, model: 0 }
+    with (ReceiptLedger = ledger) {
+        run_steps(s, post_receipt)
+    }
+}
+
+#[test]
+fn a_fresh_ledger_per_replay_preserves_state_only_between_steps() {
+    var one = Sequence::empty()
+    one.push(Input::one(3))
+    assert!(evaluate_receipts(one) == 0 && evaluate_receipts(one) == 0)
+    var twice = one
+    twice.push(Input::one(3))
+    assert!(
+        evaluate_receipts(twice) == 2 && evaluate_receipts(twice) == 2,
+    )
+}
+
+#[test]
+fn sequence_search_and_shrink_preserve_the_stateful_failure() {
+    let b = Bounds::full(3, 0, 0)
+    let r = find_sequence(
+        evaluate_receipts,
+        bounds: b,
+        arity: 1,
+        max_steps: 8,
+        seed: 7,
+        runs: 20,
+        budget: 100,
+    )
+    assert!(r.failed && r.shrink_complete && r.failed_step == 2)
+    assert!(r.shrunk.len() == 2 && evaluate_receipts(r.shrunk) == 2)
+    assert!(evaluate_receipts(r.shrunk.without(0, 1)) == 0)
+    assert!(evaluate_receipts(r.shrunk.without(1, 1)) == 0)
+    assert!(
+        r.iteration == 0 && r.original.len() == 7 && r.shrink_attempts <= 100,
+    )
+}

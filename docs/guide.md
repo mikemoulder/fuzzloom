@@ -150,6 +150,29 @@ pub fn fixture_clock() -> FixedClock { FixedClock { at: 1700000000 } }
         uses mut Ledger <- fixture_ledger(), FeePolicy <- fixture_policy()
 ```
 
+### Stateful sequences
+
+In an Fe test, `find_sequence` generates sequences of one to eight steps. Each step carries up to three bounded input words, so the first can select a command and the remaining words can provide its arguments. Provide an evaluator that creates a fresh fixture and calls `run_steps` inside its `with` block. The step function performs the operation and returns the invariant result after the operation.
+
+```fe
+fn evaluate_receipts(_ steps: Sequence) -> u64 {
+    var ledger = ReceiptLedger { seen: 0, balance: 0, model: 0 }
+    with (ReceiptLedger = ledger) { run_steps(steps, post_receipt) }
+}
+
+let result = find_sequence(
+    evaluate_receipts,
+    bounds: Bounds::full(3, 0, 0),
+    arity: 1,
+    max_steps: 8,
+    seed: 7,
+    runs: 20,
+    budget: 100,
+)
+```
+
+The [receipt ledger regression](../ingots/fuzzloom/src/sequence.fe) finds repeated crediting of the same receipt. The result contains the original sequence, its shrunk failure, and the 1-based failing step. Completed shrinking leaves no failing candidate among the tested contiguous deletions and per-word moves. Stateful campaigns are available through the Fe library. A panic from a step propagates through the test.
+
 ## 6. Restricting input ranges
 
 By default every argument ranges over its whole type. When a bug only exists in a narrow, meaningful region, declare it with a doc-comment line above the function:
