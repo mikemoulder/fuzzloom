@@ -8,6 +8,9 @@ use ingot::draw::draw
 use ingot::input::{Bounds, Input, MAX_ARITY}
 use ingot::rng::Rng
 use core::MemVec
+use ingot::payload::{SequenceFailure, SequencePassed, SequenceReplayed}
+use std::abi::DynArray
+use std::evm::revert_error
 
 pub const MAX_STEPS: u64 = 8
 
@@ -55,11 +58,17 @@ impl Sequence {
     }
 
     #[inline(never)]
-    fn replaced(self, _ index: u64, _ input: Input) -> Self {
+    fn lowered(self, _ index: u64, _ arg: u64, _ smaller: u256, _ all_matches: bool) -> Self {
         var out = Self::empty()
+        let matching = self.get(index).get(arg)
         var i: u64 = 0
         while i < self.len {
-            out.push(if i == index { input } else { self.get(i) })
+            let input = self.get(i)
+            if i == index || (all_matches && input.get(arg) == matching) {
+                out.push(input.with(arg, smaller))
+            } else {
+                out.push(input)
+            }
             i += 1
         }
         out
@@ -107,6 +116,59 @@ pub struct SequenceReport {
     pub shrink_complete: bool,
 }
 
+/// CLI harness adapter. The evaluator owns fixture construction, so it
+/// constructs a fresh fixture for each sequence, including shrink trials.
+pub fn check_sequence<F: Fn(Sequence) -> u64>(
+    _ evaluate: F,
+    bounds: Bounds,
+    arity: u64,
+    max_steps: u64,
+    seed: u64,
+    runs: u64,
+) -> !
+uses F::E
+{
+    let result = find_sequence(
+        evaluate,
+        bounds,
+        arity,
+        max_steps,
+        seed,
+        runs,
+        budget: 256,
+    )
+    if !result.failed {
+        revert_error(SequencePassed { runs })
+    }
+    var trace: MemVec<u256> = MemVec::new()
+    var i: u64 = 0
+    while i < result.shrunk.len() {
+        let step = result.shrunk.get(i)
+        trace.push(step.w0)
+        trace.push(step.w1)
+        trace.push(step.w2)
+        i += 1
+    }
+    revert_error(
+        SequenceFailure {
+            iteration: result.iteration,
+            arity,
+            original_steps: result.original.len(),
+            shrink_attempts: result.shrink_attempts,
+            shrink_complete: result.shrink_complete,
+            steps: DynArray::from_mem_vec(trace),
+        },
+    )
+}
+
+/// The 1-based first invariant failure in the supplied trace, or zero.
+pub fn replay_sequence<F: Fn(Sequence) -> u64>(_ evaluate: F, steps: Sequence) -> !
+uses F::E
+{
+    let failed_step = evaluate(steps)
+    revert_error(SequenceReplayed { failed_step })
+}
+
 /// Find the first failed sequence, then shrink its failing prefix. The
 /// evaluator must create a fresh fixture on every call and return the
 /// first failed step (or zero). A panic propagates from the evaluator.
@@ -152,7 +214,8 @@ uses F::E
 
 // Truncating beyond the first failure preserves a deterministic failure.
 // Completed shrinking establishes a local minimum under tested contiguous
-// power-of-two deletions and per-word moves to the floor or halfway there.
+// power-of-two deletions and moves to the floor or halfway there, either
+// on a single word or on all equal words in the same argument position.
 // The budget counts replays. Every accepted move decreases length or a word.
 // Keep the replay and candidate loops separate in Sonatina's optimizer.
 #[inline(never)]
@@ -194,11 +257,12 @@ uses F::E
             while arg < arity && !improved && attempts < budget {
                 let lower = floor.get(arg)
                 let distance = step.get(arg) - lower
-                var half = false
-                while distance > 0 && !improved && attempts < budget {
+                var move: u64 = 0
+                while distance > 0 && move < 4 && !improved && attempts < budget {
+                    let half = move % 2 == 1
                     let smaller = if half { lower + distance / 2 } else { lower }
                     if !half || smaller > lower {
-                        let candidate = best.replaced(i, step.with(arg, smaller))
+                        let candidate = best.lowered(i, arg, smaller, move >= 2)
                         attempts += 1
                         let failed_step = evaluate(candidate)
                         if failed_step > 0 {
@@ -206,8 +270,7 @@ uses F::E
                             improved = true
                         }
                     }
-                    if half { break }
-                    half = true
+                    move += 1
                 }
                 arg += 1
             }

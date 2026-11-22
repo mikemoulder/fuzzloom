@@ -152,6 +152,15 @@ pub fn fixture_clock() -> FixedClock { FixedClock { at: 1700000000 } }
 
 ### Stateful sequences
 
+From the checkout, name a step `pub fn seq_<name>(...) -> bool` and supply its usual `fixture_*()` functions. Arguments and range annotations follow the same rules as properties. The step performs one operation and returns the invariant result after that operation. All steps in a trace share the same effects. A new trace or shrink attempt starts with fresh fixtures.
+
+```bash
+node packages/cli/src/index.ts sequence examples/receipt-ledger --strict --seed 7 --runs 32
+node scripts/check-sequence-workflow.mjs
+```
+
+The first command shrinks a four-step receipt failure to two posts of receipt 0. With `--steps 1`, all 32 traces pass. The second command verifies on both backends that the saved trace fails at step 2, passes after the fix, and regresses when the bug is restored. `reproduce` and `replay` use the saved actions in order. A panic during a sequence is an infrastructure outcome.
+
 In an Fe test, `find_sequence` generates sequences of one to eight steps. Each step carries up to three bounded input words, so the first can select a command and the remaining words can provide its arguments. Provide an evaluator that creates a fresh fixture and calls `run_steps` inside its `with` block. The step function performs the operation and returns the invariant result after the operation.
 
 ```fe
@@ -171,7 +180,7 @@ let result = find_sequence(
 )
 ```
 
-The [receipt ledger regression](../ingots/fuzzloom/src/sequence.fe) finds repeated crediting of the same receipt. The result contains the original sequence, its shrunk failure, and the 1-based failing step. Completed shrinking leaves no failing candidate among the tested contiguous deletions and per-word moves. Stateful campaigns are available through the Fe library. A panic from a step propagates through the test.
+The Fe report contains the original sequence, the shrunk failure, and the 1-based failing step. Completed shrinking leaves no failing candidate among the tested contiguous power-of-two deletions or the floor and halfway moves on individual words and equal words in the same argument position. A panic from a step propagates through the test.
 
 ## 6. Restricting input ranges
 
@@ -252,6 +261,8 @@ FAIL  prop_x(u256)  counterexample at mutant 37 of saved failure prop_x-1a2b3c4d
 ## 9. Running in CI
 
 Exit codes make Fuzzloom a normal CI step: `1` fails the build on a finding, and `2` fails it on an infrastructure problem. Pin a seed for a deterministic check, or leave it random to explore further on every run. The seed is printed either way. `--junit` writes a report that test dashboards understand. Findings become `<failure>` and infrastructure problems become `<error>`, so a dashboard never shows out-of-gas as a broken property.
+
+From the checkout, add `--strict` to `fuzz`, `diff`, or `sequence` to turn skipped candidates in the selected command and `--only` scope into JUnit errors and exit 2 before any campaigns run. Campaign JSON includes selected, runnable, skipped, run and completed target counts. For fuzz and sequence, the input count stops at each reported first finding or the end of the successful campaign. For diff, it counts the input pairs in completed campaigns. It excludes auxiliary search rounds, mutation trials outside the reported outcome, and infrastructure outcomes.
 
 GitHub Actions, on Linux so the native backend is available:
 

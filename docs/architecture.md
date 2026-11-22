@@ -24,7 +24,8 @@ flowchart TB
     GEN --> CHK["check, property, shrink"]
     GEN --> MUT["mutate"]
     GEN --> DIF["diff"]
-    CHK & MUT & DIF --> PAY["payload"]
+    GEN --> SEQ["sequence"]
+    CHK & MUT & DIF & SEQ --> PAY["payload"]
   end
   HAR -. "imports" .-> LIB
   FE -- "fe test (sonatina)" --> X1["generated ingot"]
@@ -45,6 +46,7 @@ flowchart TB
 | `check.fe` | Campaigns (`find`, `check`, `check_bounded`), `replay`, `input_at` |
 | `mutate.fe` | Mutation campaigns around a saved input: `check_mutating`, `mutant_at`, `mutated_at` |
 | `diff.fe` | `Target` and `target1/2/3`; digests, checkpoints, `evaluate`, `target_input_at` |
+| `sequence.fe` | Generate and replay action traces, trim to the first failing step, and minimize the failing prefix |
 | `payload.fe` | The `#[error]` structs that carry every result out of Fe |
 
 **Generic over effects.** A property is any `Fn` returning `bool`. The wrappers declare `uses E = F::E`, so a property's effects flow through `check(...)` to the caller, who provides them with `with`. The library therefore never needs to know which effects a user's code has. A generic callable needs `uses F::E` at every level, and the library is written that way throughout.
@@ -57,7 +59,7 @@ flowchart TB
 
 ### Discovery (`discover.ts`)
 
-Discovery reads every `.fe` file under `src/`, with comments blanked so commented-out code is ignored and line numbers stay right. It matches `pub fn prop_*` and `pub fn diff_*` signatures, including ones that `fe fmt` wrapped across lines. For each match it:
+Discovery reads `.fe` files under `src/` and masks comments and literals while preserving line numbers. It identifies `pub fn prop_*`, `pub fn diff_*` and `pub fn seq_*` candidates by name before checking signatures, including signatures that `fe fmt` wrapped across lines. For each module-level candidate it does the following.
 
 1. parses the parameters and keeps each argument's label: positional (`_ x`), the name, or an explicit label;
 2. parses a `uses (...)` clause into effect types;
@@ -65,7 +67,7 @@ Discovery reads every `.fe` file under `src/`, with comments blanked so commente
 4. resolves each effect to exactly one fixture, by return type or else by snake-case name;
 5. computes the Fe import paths for the target, its effect types and its fixtures from the file layout (`src/a/b.fe` is `<ingot>::a::b`).
 
-Anything that cannot be tested is returned as skipped, with the reason.
+A candidate that cannot be tested is listed as skipped with its location and reason. With `--strict`, any skip within the selected command and `--only` scope prevents campaign execution.
 
 ### Harness generation (`harness.ts`)
 
@@ -103,6 +105,7 @@ Harness modes:
 | `checkpoints` | `keyed_checkpoints_within` | Up to 256 keyed prefix digests in one pass |
 | `target_input_at` | `target_input_at(_within)` | The input a digest drew at an iteration |
 | `evaluate`, `evaluate_at` | `evaluate` | One differential output |
+| `check_sequence`, `replay_sequence` | `check_sequence`, `replay_sequence` | Generate and shrink traces or execute a saved trace. The harness creates a fresh fixture on every call, and steps in that call share it |
 
 ### Running fe and classifying (`fe.ts`, `abi.ts`)
 
@@ -118,6 +121,7 @@ The engine thinks in **rounds**. Each `fe test` invocation compiles once, so eve
 |---|---|
 | `fuzz` | 1 round: every property's campaign, plus one mutation campaign per saved failure. For each abort: k-ary search rounds on the run count, 1 recovery round (`input_at` + `replay_at`), then shrink-by-replay rounds |
 | `diff` | 1 round on each backend at once: 256 checkpoints per target. For each divergence: search rounds of one checkpoint test per backend, then 1 recovery round |
+| `sequence` | One round on the selected backend. Fe runs the action traces and shrink trials within each target's test |
 | `replay`, `reproduce` | 1 round per backend that has records, both at once |
 
 Results are combined per target in a fixed order of precedence:
@@ -127,7 +131,7 @@ Results are combined per target in a fixed order of precedence:
 
 ### Failure records (`store.ts`)
 
-`.fuzzloom/failures/<target>-<fnv8>.json`, version 1. The id is a hash of the target name and the shrunk input, so finding the same minimal failure again updates the record instead of duplicating it.
+Records live at `.fuzzloom/failures/<target>-<hash>.json` and use schema version 1. Single-input records use the legacy eight-digit hash. Sequence records use a sixteen-digit hash of the ordered trace and backend. Running a backend again with the same shrunk trace updates its record and preserves the other backend's verdict.
 
 ```json
 {
@@ -148,7 +152,7 @@ Results are combined per target in a fixed order of precedence:
 }
 ```
 
-`kind` is `property`, `abort` (with `detail`, the panic reason) or `differential` (backend `both`, with both outputs in `detail`). A record found by a mutation campaign carries `seeded_by`. Records are only ever replayed with their stored input, so they stay valid when the generator changes. `replay` refuses a record whose target changed signature, and says so.
+`kind` is `property`, `abort` (with the panic reason in `detail`), `differential` (backend `both`, with both outputs in `detail`) or `sequence` (with an ordered `sequence` array of typed input words). A record found by a mutation campaign carries `seeded_by`. Replay uses the stored input or trace, so it still works when the generator changes. A changed target signature is reported as an infrastructure error.
 
 ### Reports (`report.ts`, `junit.ts`)
 

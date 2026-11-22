@@ -89,3 +89,21 @@ pub struct Evaluated {
     pub input2: u256,
     pub output: u256,
 }
+
+/// The shrunk trace in order, three words per step. A zero failing step
+/// is represented by a separate pass payload.
+#[error]
+pub struct SequenceFailure {
+    pub iteration: u64,
+    pub arity: u64,
+    pub original_steps: u64,
+    pub shrink_attempts: u64,
+    pub shrink_complete: bool,
+    pub steps: DynArray<u256>,
+}
+
+#[error]
+pub struct SequencePassed { pub runs: u64 }
+
+#[error]
+pub struct SequenceReplayed { pub failed_step: u64 }

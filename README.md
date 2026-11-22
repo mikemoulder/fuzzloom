@@ -8,7 +8,7 @@
   <a href="#quick-start"><img alt="fe 26.6" src="https://img.shields.io/badge/fe-26.6-eef0f3?labelColor=0b0d12"></a>
   <a href="#quick-start"><img alt="Node 22.18+" src="https://img.shields.io/badge/node-22.18%2B-eef0f3?labelColor=0b0d12"></a>
   <a href="#testing"><img alt="Fe tests: 100 on both backends" src="https://img.shields.io/badge/Fe%20tests-100%20%C3%97%202%20backends-5ad1ff?labelColor=0b0d12"></a>
-  <a href="#testing"><img alt="CLI test cases: 85" src="https://img.shields.io/badge/CLI%20test%20cases-85-eef0f3?labelColor=0b0d12"></a>
+  <a href="#testing"><img alt="CLI test cases: 86" src="https://img.shields.io/badge/CLI%20test%20cases-86-eef0f3?labelColor=0b0d12"></a>
   <a href="#at-a-glance"><img alt="Runtime dependencies: 0" src="https://img.shields.io/badge/runtime%20dependencies-0-eef0f3?labelColor=0b0d12"></a>
   <a href="#license"><img alt="License: Apache-2.0" src="https://img.shields.io/badge/license-Apache--2.0-eef0f3?labelColor=0b0d12"></a>
 </p>
@@ -28,13 +28,17 @@
 
 ---
 
-**Fuzzloom finds the inputs your Fe tests never tried.** You write a property as an ordinary Fe function that returns `bool`. Fuzzloom generates thousands of inputs inside Fe and shrinks every failure to a small counterexample. It saves the failure so you can replay it after the fix. It also runs the same logic on Fe's two backends, **sonatina (EVM)** and **native**, and pins the first input on which they disagree.
+**Fuzzloom finds the inputs your Fe tests never tried.** You write a property as an ordinary Fe function that returns `bool`. Fuzzloom generates inputs inside Fe, shrinks failures, and saves them for replay. Differential campaigns compare Fe’s **sonatina (EVM)** and **native** backends and verify the two outputs at a located mismatch.
 
 ```bash
-npx fuzzloom doctor    # check fe, the native backend and your project
-npx fuzzloom fuzz      # every prop_* function in this ingot, 10,000 inputs each
-npx fuzzloom diff      # every diff_* function, sonatina against native
+npx fuzzloom@0.1.2 doctor    # check fe, the native backend and your project
+npx fuzzloom@0.1.2 fuzz      # every supported prop_* target, 10,000 inputs each
+npx fuzzloom@0.1.2 diff      # every supported diff_* target, sonatina against native
 ```
+
+For a reproducible comparison with an independent reference, run `node scripts/check-shift-oracle.mjs` from the checkout. Both backends matched 196,608 exact 8-bit shift expectations and detected the deliberately corrupted expectation. The npm release also passed a separate integration check against a pinned external Fe Keccak ingot. [Experiment results](docs/experiments.md)
+
+Run `node scripts/check-sequence-workflow.mjs` from the checkout to reproduce a duplicate receipt credit on both backends. Thirty-two single-step traces pass on each backend. A four-step trace shrinks to two posts of receipt `0`. The script saves both traces, applies the one-line fix, checks `FIXED`, then restores the bug and checks `REGRESSED`. [Receipt example](examples/receipt-ledger/src/lib.fe) · [Replay implementation](scripts/check-sequence-workflow.mjs)
 
 ## The problem
 
@@ -245,6 +249,7 @@ The [guide](docs/guide.md) covers each of these in detail, with the failure mess
 | `fuzzloom list [path]` | Lists every target with its signature, effects, fixtures and declared ranges, and every skipped function with the reason |
 | `fuzzloom fuzz [path]` | Runs every property campaign, plus one mutation campaign per saved failure, then recovers and shrinks any abort |
 | `fuzzloom diff [path]` | Compares keyed checkpoints on sonatina and native and verifies the located mismatch |
+| `fuzzloom sequence [path]` | From source, generates and shrinks traces of `seq_*` invariant checks, then saves failing traces for replay |
 | `fuzzloom reproduce <id> [path]` | Replays one saved failure from its stored input, with no random generation involved |
 | `fuzzloom replay [path]` | Replays every saved failure: `FIXED` when it now passes, `FAILS` when it still fails, `REGRESSED` when a fixed failure is back |
 
@@ -252,9 +257,11 @@ The [guide](docs/guide.md) covers each of these in detail, with the failure mess
 |---|---|
 | `--seed <n>` | Base seed. The CLI prints the seed so the input stream can be repeated |
 | `--digest-key <n>` | Reuse the recorded checkpoint key for `diff`. The default is sampled independently of the campaign seed |
-| `--runs <n>` | Positive 64-bit input count per property (default 10,000) or differential target (default 100,000) |
+| `--runs <n>` | Positive 64-bit budget per property (10,000 by default), differential target (100,000) or sequence target (1,000) |
+| `--steps <n>` | From source, limit each sequence to 1–8 actions (default 8) |
 | `--backend <b>` | `sonatina` (EVM, default) or `native` |
 | `--only <text>` | Select targets or saved failures whose name contains the text. An empty selection exits 2 |
+| `--strict` | From source, exit 2 before running if a selected `prop_*`, `diff_*`, or `seq_*` candidate was skipped |
 | `--no-corpus` | `fuzz` without the mutation campaigns around saved failures |
 | `--uniform` | In 0.1.2, `fuzz` with rejection sampling inside the declared ranges. Disables edge bias, argument correlation and corpus mutation |
 | `--json` | Machine-readable output |
@@ -365,7 +372,7 @@ Batching was measured as an A/B on the same machine under the same load: `fuzz` 
 
 - **Fuzzing is not a proof.** A passing campaign means 10,000 well-chosen inputs found nothing, and `Passed` reports exactly what was exercised (edge draws, correlated inputs, which argument bounds were reached). It does not mean the property holds for every input.
 - **No coverage guidance yet.** Generation is boundary-biased and correlated, and mutation is seeded from saved failures, but nothing steers by which branches ran.
-- **Stateful sequences run in Fe tests.** The Fe library generates, evaluates and shrinks sequences of up to eight steps with one fresh fixture per replay. See [stateful sequences](docs/guide.md#stateful-sequences).
+- **Stateful sequence limits.** A trace has at most eight operations. Each replay starts from a fresh fixture. The CLI saves invariant failures, while a panic during a sequence is reported as infrastructure. See [stateful sequences](docs/guide.md#stateful-sequences).
 - **Integers and bool only, 1 to 3 arguments.** No structs, arrays, addresses or strings as generated inputs yet.
 - **Contract-level differential testing is out of scope.** Deploying a contract has no native counterpart, so `diff` compares shared logic, not deployed contracts.
 - **Local minima, not global ones.** Both shrinkers state exactly which moves they tried. The vesting example shrinks `total` to about 1.5 times the exact overflow threshold, and the guide shows why.
@@ -375,8 +382,8 @@ Batching was measured as an A/B on the same machine under the same load: `fuzz` 
 | Suite | Count | What it covers |
 |---|---|---|
 | Fe library and examples | **100 tests, run on sonatina and on native** | PRNG known answers, range sampling, input and shrink bounds, stateful fixture isolation, prefix consistency and differential fingerprint arithmetic |
-| CLI | **85 test cases** | Discovery, harness generation, ABI validation, per-test outcome parsing, k-ary search, replay, reporting, and integration tests against both Fe backends |
-| Pipeline | [`scripts/ci.sh`](scripts/ci.sh) | Installs Fe, runs formatting and tests, then checks all three examples through the installed checkout package. A separate smoke test installs a pinned npm release and runs vault-math fuzz on each backend and diff across both |
+| CLI | **86 test cases** | Discovery, strict campaign selection, harness generation, ABI validation, k-ary search, replay, reporting, and integration tests against both Fe backends |
+| Pipeline | [`scripts/ci.sh`](scripts/ci.sh) | Runs both backends, the exact shift oracle, the stateful regression lifecycle through the installed checkout, and an external Fe ingot through the pinned npm release |
 
 The commands for each suite are in [Build and test from source](#build-and-test-from-source). CI runs `scripts/ci.sh` on CircleCI, and the same script runs locally:
 
@@ -408,7 +415,7 @@ Fuzzloom is **alpha**, built for the Fe Builders Challenge 2026 and tested hard.
 
 - **Real and tested:** everything above, on fe 26.6.0, on both backends in local verification. CI separately checks the published npm package.
 - **Verified platforms:** Linux; Windows with the native backend through WSL. macOS uses the same code paths as Linux but has not been run by us.
-- **Next:** coverage-guided feedback, CLI discovery and replay of stateful sequences, structured inputs (arrays, addresses), campaigns split across tests to go past the gas cap, and filing the compiler crash upstream.
+- **Next:** coverage-guided feedback, stateful panic recovery, structured inputs (arrays, addresses), and campaigns split across tests to go past the gas cap.
 
 ## Contributing
 
@@ -421,6 +428,12 @@ Found a bug in Fuzzloom, or a way it misreports a result? Open an issue. For any
 - The [Fe](https://github.com/argotorg/fe) team, for a language with effects, a native backend and a test runner worth building on.
 - [QuickCheck](https://hackage.haskell.org/package/QuickCheck), [Hypothesis](https://hypothesis.works) and [proptest](https://github.com/proptest-rs/proptest) for property-based testing and shrinking. [AFL](https://lcamtuf.coredump.cx/afl/) and [libFuzzer](https://llvm.org/docs/LibFuzzer.html) for corpus-seeded mutation.
 - Sebastiano Vigna, for xorshift64\* and splitmix64.
+
+## Contest declaration
+
+- **Pre-existing work.** Fuzzloom’s repository started on November 16, 2026. The submitted implementation was developed during the contest window. [Initial revision](https://github.com/MikeMoulder/fuzzloom/commit/7f90342)
+- **Reused material.** The CLI has zero runtime npm dependencies. The website uses the MIT-licensed taste-skill kit, SVG Logos icons, and Google Fonts. CI fetches the pinned Fe Keccak ingot as an external test dependency. The npm package bundles the Fuzzloom ingot. [Website source](https://github.com/MikeMoulder/fuzzloom-site) · [External test dependency](https://github.com/fe-lang/keccak/tree/345d5088de986fe54b23a6aaa3a33e1c349d0960)
+- **AI assistance.** Claude Code and OpenAI Codex assisted with implementation, tests, documentation, review, and release checks under Mike Moulder’s direction. Mike chose the project, set scope, and approved the releases. The reported results come from executed tests and experiments.
 
 ## License
 

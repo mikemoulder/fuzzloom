@@ -2,6 +2,12 @@
 
 All notable changes to Fuzzloom. The project follows [semantic versioning](https://semver.org); while the version is 0.x, minor versions may change behaviour.
 
+## Unreleased
+
+- Every public `prop_*`, `diff_*`, and `seq_*` candidate is listed with its eligibility. `--strict` fails a CI campaign when a selected candidate is skipped.
+- `sequence` generates, shrinks, stores, and replays bounded stateful traces through Fe effects. Shrinking can lower repeated arguments together.
+- CI checks exact 8-bit shift results against an independent arithmetic oracle and runs the published CLI against a pinned external Fe ingot.
+
 ## 0.1.2 (2026-11-22)
 
 - Differential campaigns use independently keyed polynomial checkpoints. The CLI records the key for replay and verifies that the same input returns different outputs before saving a mismatch.

@@ -55,6 +55,9 @@ test("invalid booleans, truncated strings and misplaced tails cannot become resu
   assert.throws(() => decodePayload(cp + [1n, 1n, 1n, 1n, 161n, 1n, 0n].map(word).join("")), /offset/);
   assert.throws(() => decodePayload("0x08c379a0" + word(32n) + word(4n)), /length/);
   assert.throws(() => decodePayload("0x4e487b71"), /Panic payload/);
+  const sequence = selector("SequenceFailure(uint64,uint64,uint64,uint64,bool,uint256[])");
+  const head = [1n, 1n, 4n, 16n, 1n, 192n];
+  assert.throws(() => decodePayload(sequence + [...head, 4n, 0n, 0n, 0n, 0n].map(word).join("")), /SequenceFailure shape/);
 });
 
 test("zigzag matches the Fe Word encoding", () => {

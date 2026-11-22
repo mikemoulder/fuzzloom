@@ -22,7 +22,7 @@ export type Effect = { type: string; mut: boolean; fixture: string };
 
 /** A `prop_*` or `diff_*` function found in a user ingot. */
 export type Target = {
-  kind: "property" | "differential";
+  kind: "property" | "differential" | "sequence";
   name: string;
   /**
    * `label` is how the argument is passed when Fuzzloom calls the function
@@ -44,6 +44,7 @@ export type Target = {
 
 /** Three input words, as Fuzzloom payloads carry them. */
 export type Words = [bigint, bigint, bigint];
+export const MAX_SEQUENCE_STEPS = 8;
 
 /** What one `fe test` run of a harness produced. */
 export type Outcome =
@@ -55,6 +56,9 @@ export type Outcome =
   /** accs[j] is the digest after first + j * step runs. */
   | { kind: "checkpoints"; seed: bigint; first: bigint; step: bigint; arity: number; accs: bigint[] }
   | { kind: "evaluated"; arity: number; input: Words; output: bigint }
+  | { kind: "sequence-passed"; runs: bigint }
+  | { kind: "sequence-failed"; arity: number; iteration: bigint; originalSteps: number; shrinkAttempts: bigint; shrinkComplete: boolean; steps: Words[] }
+  | { kind: "sequence-replayed"; failedStep: bigint }
   | { kind: "panic"; code: bigint; reason: string }
   | { kind: "revert"; message: string }
   | { kind: "infra"; reason: InfraReason; detail: string };

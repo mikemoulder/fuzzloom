@@ -99,6 +99,12 @@ step "Demo: fuzz amm-swap (a real first draft that overflows u64), seed 7"
 demo "$pkg_bin" fuzz amm-swap "$ROOT/examples/amm-swap" 1 "0 passed, 3 failed, 0 infrastructure errors" --no-corpus
 grep -q "reserve_out = 10312385981465" reports/amm-swap-fuzz.txt
 
+step "Independent integer oracle: exact 8-bit shift comparisons"
+node scripts/check-shift-oracle.mjs > reports/shift-oracle.json
+
+step "Installed checkout: stateful sequence regression lifecycle"
+node scripts/check-sequence-workflow.mjs "$pkg_bin" | tee reports/sequence-workflow.txt
+
 step "Published npm release: fuzz on both backends and diff"
 # Pin the registry smoke test to a release that exists independently of the
 # checkout version, which may be in CI before it is published.
@@ -113,5 +119,8 @@ for backend in sonatina native; do
 done
 demo "$published_bin" diff published-vault-math "$published_project" 1 "3 agreed, 1 diverged, 0 infrastructure errors"
 grep -q "first at input 269" reports/published-vault-math-diff.txt
+
+step "Published package in an independent Fe ingot"
+bash scripts/check-external-ingot.sh "$published_bin" | tee reports/external-ingot.txt
 
 step "CI passed"

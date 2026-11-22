@@ -45,6 +45,8 @@ export function fnv1a64(text: string): bigint {
  */
 export type HarnessCall =
   | { mode: "check"; base: bigint; runs: bigint; corpus?: Words; uniform?: boolean; measure?: boolean }
+  | { mode: "check_sequence"; base: bigint; runs: bigint; maxSteps: number }
+  | { mode: "replay_sequence"; steps: readonly Words[] }
   | { mode: "replay"; input: Words }
   | { mode: "input_at"; base: bigint; iteration: bigint; corpus?: Words; uniform?: boolean }
   | { mode: "digest"; base: bigint; runs: bigint }
@@ -103,13 +105,40 @@ ${vars.map((v) => `        ${v}
  * from one domain.
  */
 export function boundsExpr(t: Target): string {
+  if (t.kind === "sequence") {
+    const tops = t.args.map((a) => `top<${a.type}>()`);
+    while (tops.length < 3) tops.push("0");
+    const full = `Bounds::full(${tops.join(", ")})`;
+    return (t.bounds ?? []).reduce((e, b) => `${e}.restrict(${b.arg}, lo: ${hex(b.lo)}, hi: ${hex(b.hi)})`, full);
+  }
   const w = callable(t);
   const full = t.kind === "property" ? `bounds_of(${w})` : `target_bounds_of(${w})`;
   return (t.bounds ?? []).reduce((e, b) => `${e}.restrict(${b.arg}, lo: ${hex(b.lo)}, hi: ${hex(b.hi)})`, full);
 }
 
+/** The fixtures live outside the step closure. Every replay rebuilds them,
+ * and all steps in that replay use the same instance of each effect. */
+function sequenceEvaluator(t: Target): string {
+  const args = t.args.map((a, i) => `${a.label === null ? "" : `${a.label ?? a.name}: `}${a.type}::from_word(input.w${i})`);
+  const run = `run_steps(steps, |input: Input| { ${t.name}(${args.join(", ")}) })`;
+  if (!t.effects?.length) return `|steps: Sequence| { ${run} }`;
+  const vars = t.effects.map((e, i) => `var e${i} = ${e.fixture}()`).join("\n        ");
+  const bindings = t.effects.map((e, i) => `${e.type} = e${i}`).join(", ");
+  return `|steps: Sequence| {
+        ${vars}
+        with (${bindings}) { ${run} }
+    }`;
+}
+
 /** The body of the harness test for `call` on `t`. */
 export function harnessBody(t: Target, call: HarnessCall): string {
+  if (call.mode === "check_sequence") {
+    return `check_sequence(${sequenceEvaluator(t)}, bounds: ${boundsExpr(t)}, arity: ${t.args.length}, max_steps: ${call.maxSteps}, seed: ${seedExpr(t, call.base)}, runs: ${call.runs})`;
+  }
+  if (call.mode === "replay_sequence") {
+    const steps = call.steps.map((step) => `    trace.push(${inputExpr(t, step)})`);
+    return ["var trace = Sequence::empty()", ...steps, `    replay_sequence(${sequenceEvaluator(t)}, steps: trace)`].join("\n");
+  }
   const wrapped = callable(t);
   const bounded = Boolean(t.bounds?.length);
   const B = boundsExpr(t);

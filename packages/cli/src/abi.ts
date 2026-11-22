@@ -4,7 +4,7 @@
 // from them with keccak-256, never hardcoded.
 
 import { selector } from "./keccak.ts";
-import type { FeType, Outcome, Words } from "./types.ts";
+import { MAX_SEQUENCE_STEPS, type FeType, type Outcome, type Words } from "./types.ts";
 
 export const SIGNATURES = {
   counterexample: "Counterexample(uint64,uint64,uint64,uint256,uint256,uint256,uint256,uint256,uint256,uint64,bool)",
@@ -14,6 +14,9 @@ export const SIGNATURES = {
   digest: "Digest(uint64,uint64,uint64,uint256)",
   checkpoints: "Checkpoints(uint64,uint64,uint64,uint64,uint256[])",
   evaluated: "Evaluated(uint64,uint256,uint256,uint256,uint256)",
+  sequenceFailed: "SequenceFailure(uint64,uint64,uint64,uint64,bool,uint256[])",
+  sequencePassed: "SequencePassed(uint64)",
+  sequenceReplayed: "SequenceReplayed(uint64)",
   panic: "Panic(uint256)",
   error: "Error(string)",
 } as const;
@@ -94,6 +97,22 @@ export function decodePayload(hex: string): Outcome {
     case SELECTORS.evaluated:
       need(w, 5, "Evaluated");
       return { kind: "evaluated", arity: arity(w[0]!), input: triple(w, 1), output: w[4]! };
+    case SELECTORS.sequencePassed:
+      need(w, 1, "SequencePassed");
+      return { kind: "sequence-passed", runs: w[0]! };
+    case SELECTORS.sequenceReplayed:
+      need(w, 1, "SequenceReplayed");
+      return { kind: "sequence-replayed", failedStep: w[0]! };
+    case SELECTORS.sequenceFailed: {
+      const length = w.length - 7;
+      if (w[5] !== 192n || w[6] !== BigInt(length) || length < 3 || length % 3 !== 0 || length > MAX_SEQUENCE_STEPS * 3
+          || w[2]! < BigInt(length / 3) || w[2]! > BigInt(MAX_SEQUENCE_STEPS)) {
+        throw new Error("invalid SequenceFailure shape");
+      }
+      const steps = Array.from({ length: length / 3 }, (_, i) => triple(w, 7 + i * 3));
+      return { kind: "sequence-failed", arity: arity(w[1]!), iteration: w[0]!, originalSteps: Number(w[2]),
+        shrinkAttempts: w[3]!, shrinkComplete: flag(w[4]!), steps };
+    }
     case SELECTORS.panic: {
       need(w, 1, "Panic");
       const code = w[0]!;

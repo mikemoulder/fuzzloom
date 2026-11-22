@@ -23,6 +23,8 @@ test("a directory without fe.toml is not a project", () => {
 });
 
 test("the example project reports its targets", () => {
-  const cs = checks(resolve(import.meta.dirname, "../../../examples/vault-math"), missing);
-  assert.match(cs.find((c) => c.name === "Project")!.detail, /7 prop_\* and 4 diff_\* functions, 0 skipped/);
+  const vault = checks(resolve(import.meta.dirname, "../../../examples/vault-math"), missing);
+  assert.match(vault.find((c) => c.name === "Project")!.detail, /7 prop_\*, 4 diff_\*, 0 seq_\* functions, 0 skipped/);
+  const receipts = checks(resolve(import.meta.dirname, "../../../examples/receipt-ledger"), missing);
+  assert.match(receipts.find((c) => c.name === "Project")!.detail, /0 prop_\*, 0 diff_\*, 1 seq_\* functions, 0 skipped/);
 });

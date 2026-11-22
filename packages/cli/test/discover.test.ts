@@ -47,6 +47,10 @@ pub fn prop_ret(_ a: u8) -> u8 { a }
 pub fn prop_generic<T>(_ a: T) -> bool { true }
 pub fn prop_fx(_ a: u8) -> bool uses (evm: Evm, ) junk { true }
 pub fn diff_void(_ a: u8) { }
+pub fn diff_tuple(_ a: u8) -> (u8, u8) { (a, a) }
+pub fn prop_tuple(_ pair: (u8, u8)) -> bool { true }
+pub fn seq_array(_ data: [u8; 2]) -> bool { true }
+impl Dummy { pub fn prop_method(_ a: u8) -> bool { true } }
 `;
   const r = discoverSource(src, "f.fe");
   assert.equal(r.targets.length, 0);
@@ -58,6 +62,10 @@ pub fn diff_void(_ a: u8) { }
   assert.match(reasons.prop_generic!, /generic/);
   assert.match(reasons.prop_fx!, /cannot read the effect clause/);
   assert.match(reasons.diff_void!, /must return/);
+  assert.match(reasons.diff_tuple!, /found \(u8, u8\)/);
+  assert.match(reasons.prop_tuple!, /scalar arguments/);
+  assert.match(reasons.seq_array!, /scalar arguments/);
+  assert.match(reasons.prop_method!, /module-level/);
 });
 
 test("accepts labelled parameters (they work as positional Fn values)", () => {

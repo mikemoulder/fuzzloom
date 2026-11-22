@@ -32,7 +32,7 @@ pub fn fixture_policy() -> FeePolicy { FeePolicy { bps: 25, min_fee: 5 } }
 - Arguments: 1 to 3 of `u8` to `u256`, `i8` to `i256`, or `bool`.
 - Effects (`uses`) are provided by a `pub fn fixture_*()` per effect type, fresh for every evaluation.
 - `/// fuzzloom: <arg> in <lo>..=<hi>` restricts an argument's range.
-- A function that matches the naming convention but cannot be tested is listed with the reason, never silently skipped.
+- `list` reports skipped targets with reasons. The source checkout adds strict discovery for unsupported signatures and can refuse to run if any selected target is skipped. See the [CI guide](https://github.com/MikeMoulder/fuzzloom/blob/main/docs/guide.md#9-running-in-ci).
 
 ## Requirements
 

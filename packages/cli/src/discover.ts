@@ -3,6 +3,7 @@
 // Convention (no configuration):
 //   pub fn prop_<name>(args) -> bool   property, 1 to 3 arguments
 //   pub fn diff_<name>(args) -> T      differential target, 1 to 3 arguments
+//   pub fn seq_<name>(args) -> bool   one stateful step, 1 to 3 arguments
 // Arguments and T must be u8..u256, i8..i256 or bool. A target may use
 // effects (`uses (name: mut T)`) when the ingot provides a fixture for each
 // (see discover). Anything else that
@@ -52,7 +53,9 @@ function maskNonCode(src: string): string {
   return out.join("");
 }
 
-const SIGNATURE = /\bpub\s+fn\s+((?:prop|diff)_\w+)\s*(<[^>]*>)?\s*\(([^)]*)\)\s*(?:->\s*([\w:]+))?\s*(uses\b[^{]*)?\{/g;
+// Find the name first. A target with an unsupported signature must still
+// appear in the inventory even when none of its types can be parsed.
+const CANDIDATE = /\bpub\s+fn\s+((?:prop|diff|seq)_\w*)\b/g;
 const PARAM = /^(?:(own|mut)\s+)?(?:(\w+)\s+)?(\w+)\s*:\s*(?:(own|mut)\s+)?([\w:]+)$/;
 
 const isFeType = (t: string): t is FeType => (FE_TYPES as readonly string[]).includes(t);
@@ -116,14 +119,42 @@ export function discoverSource(src: string, file: string): { targets: RawTarget[
   const clean = maskNonCode(src);
   const targets: RawTarget[] = [];
   const skipped: Skipped[] = [];
-  for (const m of clean.matchAll(SIGNATURE)) {
-    const [, name = "", generics, params = "", ret, usesClause] = m;
-    const line = clean.slice(0, m.index).split("\n").length;
-    const kind = name.startsWith("prop_") ? "property" : "differential";
+  const candidates = [...clean.matchAll(CANDIDATE)];
+  let line = 1;
+  let braceDepth = 0;
+  let scanned = 0;
+  for (const [i, m] of candidates.entries()) {
+    const name = m[1]!;
+    for (; scanned < m.index; scanned++) {
+      if (clean[scanned] === "\n") line++;
+      if (clean[scanned] === "{") braceDepth++;
+      if (clean[scanned] === "}") braceDepth--;
+    }
+    const kind = name.startsWith("prop_") ? "property" : name.startsWith("seq_") ? "sequence" : "differential";
     const skip = (reason: string) => skipped.push({ name, file, line, reason });
-    if (generics) { skip("generic functions are not supported; wrap it in a concrete function"); continue; }
+    if (braceDepth !== 0) { skip("target must be a module-level function"); continue; }
+    const head = clean.slice(m.index + m[0].length, candidates[i + 1]?.index).trimStart();
+    if (head.startsWith("<")) { skip("generic functions are not supported; wrap it in a concrete function"); continue; }
+    if (!head.startsWith("(")) { skip("cannot read the parameter list"); continue; }
+    let depth = 1;
+    let end = 1;
+    for (; end < head.length && depth > 0; end++) {
+      if (head[end] === "(") depth++;
+      if (head[end] === ")") depth--;
+      if (head[end] === "{" || head[end] === "}") break;
+    }
+    if (depth !== 0) { skip("cannot read the parameter list"); continue; }
+    const params = head.slice(1, end - 1);
+    const body = head.indexOf("{", end);
+    if (body === -1) { skip("missing function body"); continue; }
+    const suffix = head.slice(end, body).trim();
+    const signature = /^(?:->\s*(.*?))?(?:\b(uses\b.*))?$/s.exec(suffix);
+    if (!signature) { skip("cannot read the return type or effect clause"); continue; }
+    const ret = signature[1]?.trim();
+    const usesClause = signature[2];
     const uses = usesClause ? parseUses(usesClause) : undefined;
     if (usesClause && !uses) { skip(`cannot read the effect clause "${usesClause.trim()}"`); continue; }
+    if (/[([<]/.test(params)) { skip(`cannot parse parameter list "${params.trim()}"; use scalar arguments`); continue; }
     const parts = params.split(",").map((p) => p.trim()).filter((p) => p.length > 0);
     if (parts.length < 1 || parts.length > 3) { skip(`takes ${parts.length} arguments; Fuzzloom supports 1 to 3`); continue; }
     const args: Target["args"] = [];
@@ -131,7 +162,8 @@ export function discoverSource(src: string, file: string): { targets: RawTarget[
     for (const p of parts) {
       const pm = p.match(PARAM);
       if (!pm) { bad = `cannot parse parameter "${p}"`; break; }
-      const [, , label, argName = "", mode, type = ""] = pm;
+      const [, prefixMode, label, argName = "", suffixMode, type = ""] = pm;
+      const mode = prefixMode ?? suffixMode;
       if (mode) { bad = `parameter "${argName}" is passed as ${mode}; use a plain value parameter`; break; }
       if (!isFeType(type)) { bad = `parameter "${argName}" has type ${type}; supported: ${FE_TYPES.join(", ")}`; break; }
       // Labels matter only when Fuzzloom calls the function directly (an
@@ -143,8 +175,8 @@ export function discoverSource(src: string, file: string): { targets: RawTarget[
     const bounds = parseBounds(docAbove(src, line), args);
     if (typeof bounds === "string") { skip(bounds); continue; }
     const extra = { ...(uses ? { uses } : {}), ...(bounds.length ? { bounds } : {}) };
-    if (kind === "property") {
-      if (ret !== "bool") { skip(`properties must return bool, found ${ret ?? "nothing"}`); continue; }
+    if (kind !== "differential") {
+      if (ret !== "bool") { skip(`${kind === "sequence" ? "sequence steps" : "properties"} must return bool, found ${ret || "nothing"}`); continue; }
       targets.push({ kind, name, args, file, line, ...extra });
     } else {
       if (!ret || !isFeType(ret)) { skip(`differential targets must return an integer or bool, found ${ret ?? "nothing"}`); continue; }

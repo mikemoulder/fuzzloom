@@ -1,0 +1,24 @@
+//! Posting a receipt increases the balance at most once per receipt ID.
+
+pub struct Ledger { pub seen: u8, pub balance: u64 }
+
+pub fn fixture_ledger() -> Ledger {
+    Ledger { seen: 0, balance: 0 }
+}
+
+fn credit(_ id: u8) uses (ledger: mut Ledger) {
+    let bit: u8 = 1 << id
+    ledger.seen = ledger.seen | bit
+    // A repeated receipt incorrectly changes the balance.
+    ledger.balance += 1
+}
+
+/// fuzzloom: id in 0..=3
+pub fn seq_credit_once(_ id: u8) -> bool uses (ledger: mut Ledger) {
+    let seen = ledger.seen
+    let before = ledger.balance
+    let bit: u8 = 1 << id
+    credit(id)
+    let delta: u64 = if seen & bit == 0 { 1 } else { 0 }
+    ledger.balance == before + delta && ledger.seen == (seen | bit)
+}

@@ -100,6 +100,17 @@ function verifyOutcome({ target, call }: Case, outcome: Outcome): Outcome {
         return invalid("payload reports a different input from the requested replay");
       }
       break;
+    case "sequence-passed":
+      if (call.mode !== "check_sequence" || outcome.runs !== call.runs) return invalid("sequence pass does not match the campaign");
+      break;
+    case "sequence-failed":
+      if (call.mode !== "check_sequence" || outcome.iteration >= call.runs || outcome.originalSteps > call.maxSteps) {
+        return invalid("sequence failure does not match the campaign");
+      }
+      break;
+    case "sequence-replayed":
+      if (call.mode !== "replay_sequence" || outcome.failedStep > BigInt(call.steps.length)) return invalid("sequence replay step is outside the trace");
+      break;
   }
   return outcome;
 }

@@ -69,10 +69,11 @@ export function checks(projectRoot: string | undefined, cfg: FeConfig = defaultF
       try {
         const d = discover(projectRoot);
         const props = d.targets.filter((t) => t.kind === "property").length;
-        const diffs = d.targets.length - props;
+        const diffs = d.targets.filter((t) => t.kind === "differential").length;
+        const sequences = d.targets.filter((t) => t.kind === "sequence").length;
         out.push({
           name: "Project", level: d.targets.length ? "ok" : "warn",
-          detail: `ingot ${d.ingot}: ${props} prop_* and ${diffs} diff_* functions, ${d.skipped.length} skipped`,
+          detail: `ingot ${d.ingot}: ${props} prop_*, ${diffs} diff_*, ${sequences} seq_* functions, ${d.skipped.length} skipped`,
           ...(d.targets.length ? {} : { fix: "write `pub fn prop_<name>(args) -> bool` (or diff_<name>) in the ingot's src/" }),
         });
         for (const s of d.skipped) out.push({ name: `  skipped ${s.name}`, level: "warn", detail: `${s.file}:${s.line} ${s.reason}` });

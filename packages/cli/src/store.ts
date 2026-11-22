@@ -16,15 +16,15 @@ import { join } from "node:path";
 import { describe, valueToWord, wordToValue } from "./abi.ts";
 import { fnv1a64 } from "./harness.ts";
 import { safeDir } from "./paths.ts";
-import { FE_TYPES, type Backend, type FeType, type Target, type Words } from "./types.ts";
+import { FE_TYPES, MAX_SEQUENCE_STEPS, type Backend, type FeType, type Target, type Words } from "./types.ts";
 
 export const RECORD_VERSION = 1;
 
-/** A record id as recordId generates it: the target name, a dash, 8 hex digits. */
-const ID = /^\w{1,200}-[0-9a-f]{8}$/;
+/** Target name and a hash suffix. Sequence records use all 16 hex digits. */
+const ID = /^\w{1,200}-(?:[0-9a-f]{8}|[0-9a-f]{16})$/;
 const NAME = /^\w{1,200}$/;
 const HEX = /^0x[0-9a-f]{1,64}$/;
-const KINDS = ["property", "abort", "differential"] as const;
+const KINDS = ["property", "abort", "differential", "sequence"] as const;
 const BACKENDS = ["sonatina", "native", "both"] as const;
 
 export const isRecordId = (id: string): boolean => ID.test(id);
@@ -39,11 +39,13 @@ const text = (v: unknown, max = 2000): string => String(v).replace(/[\u0000-\u00
 export type FailureRecord = {
   version: number;
   id: string;
-  kind: "property" | "abort" | "differential";
+  kind: typeof KINDS[number];
   target: string;
   args: { name: string; type: string }[];
   /** Input words, hex, one per argument. */
   input: string[];
+  /** Ordered action trace for sequence records. Input mirrors its first step. */
+  sequence?: string[][];
   /** Human-readable values, one per argument. */
   values: string[];
   /** First failing input before shrinking, when known. */
@@ -103,6 +105,14 @@ export function validateRecord(raw: unknown, expectId?: string): FailureRecord {
     return v as string[];
   };
   const input = words(r.input, "input");
+  let sequence: string[][] | undefined;
+  if (r.kind === "sequence") {
+    if (r.backend === "both") bad("sequence records require one backend");
+    const steps = r.sequence;
+    if (!Array.isArray(steps) || steps.length < 1 || steps.length > MAX_SEQUENCE_STEPS) bad("sequence length must be 1 to 8");
+    sequence = (steps as unknown[]).map((step, i) => words(step, `sequence step ${i + 1}`));
+    if (input.some((word, i) => BigInt(word) !== BigInt(sequence![0]![i]!))) bad("input must match the first sequence step");
+  }
   const values = Array.isArray(r.values) ? (r.values as unknown[]).slice(0, args.length).map((v) => text(v, 200)) : [];
   if (!BACKENDS.includes(r.backend as never)) bad("unknown backend");
   if (r.status !== "open" && r.status !== "fixed") bad("unknown status");
@@ -113,6 +123,7 @@ export function validateRecord(raw: unknown, expectId?: string): FailureRecord {
     target: r.target as string,
     args,
     input,
+    ...(sequence ? { sequence } : {}),
     values,
     ...(r.original !== undefined ? { original: words(r.original, "original") } : {}),
     iteration: text(r.iteration ?? "", 80),
@@ -140,16 +151,22 @@ export function makeRecord(o: {
   kind: FailureRecord["kind"]; target: Target; input: Words; original?: Words; iteration: bigint;
   base: bigint; runs: bigint; backend: FailureRecord["backend"]; detail?: string; seededBy?: string; feVersion: string;
   sampling?: FailureRecord["sampling"];
+  steps?: readonly Words[];
 }): FailureRecord {
   const n = o.target.args.length;
   const now = new Date().toISOString();
+  const sequence = o.steps?.map((step) => step.slice(0, n).map(hexWord));
+  const id = sequence
+    ? `${o.target.name}-${fnv1a64(JSON.stringify([o.backend, sequence])).toString(16).padStart(16, "0")}`
+    : recordId(o.target.name, o.input, n);
   return {
     version: RECORD_VERSION,
-    id: recordId(o.target.name, o.input, n),
+    id,
     kind: o.kind,
     target: o.target.name,
     args: o.target.args.map((a) => ({ name: a.name, type: a.type })),
     input: o.input.slice(0, n).map(hexWord),
+    ...(sequence ? { sequence } : {}),
     values: o.target.args.map((a, i) => describe(o.input[i]!, a.type)),
     ...(o.original ? { original: o.original.slice(0, n).map(hexWord) } : {}),
     iteration: o.iteration.toString(),
@@ -233,4 +250,8 @@ export function listRecords(userRoot: string, warn: (msg: string) => void = (m) 
 export function recordWords(r: FailureRecord): Words {
   const w = r.input.filter((h) => HEX.test(h)).map((h) => BigInt(h));
   return [w[0] ?? 0n, w[1] ?? 0n, w[2] ?? 0n];
+}
+
+export function recordSequence(r: FailureRecord): Words[] {
+  return (r.sequence ?? []).map((step) => [BigInt(step[0]!), BigInt(step[1] ?? "0"), BigInt(step[2] ?? "0")]);
 }
